@@ -44,6 +44,7 @@ canvas { display: block; width: 100%; height: 100%; }
 .caveat { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; max-width: 80ch; }
 @media (prefers-reduced-motion: reduce) { .picker button { transition: none; } }
 </style>
+<script src="textures.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
 
@@ -152,7 +153,8 @@ function emit(n, o) {
     const pos = typeof o.pos === "function" ? o.pos(i) : o.pos.slice();
     const vel = typeof o.vel === "function" ? o.vel(pos, i) : (o.vel ? o.vel.slice() : [0, 0, 0]);
     parts.push({ pos, vel, age: 0, life: rnd(o.life[0], o.life[1]), s0: o.size[0], s1: o.size[1], kind: o.kind || "glow",
-      color: o.color || C.white, alpha: o.alpha ?? 1, drag: o.drag || 0, acc: o.acc || [0, 0, 0], streak: o.streak || 0, fadeIn: o.fadeIn || 0 });
+      color: o.color || C.white, alpha: o.alpha ?? 1, drag: o.drag || 0, acc: o.acc || [0, 0, 0], streak: o.streak || 0, fadeIn: o.fadeIn || 0,
+      tex: o.tex || (o.kind === "ink" ? "Smoke" : o.streak ? "Spark" : "Flare"), rot: rnd(0, Math.PI * 2), rs: rnd(-1.5, 1.5) });
   }
 }
 function shake(mag, dur) { shakes.push({ mag, dur, t: 0, seed: Math.random() * 100 }); }
@@ -242,6 +244,7 @@ function ring(center, o) {
   const tilt = o.tilt || null;
   fx.push({ delay: o.delay || 0, dur: o.dur, layer: o.ink ? 1 : 3, draw(k) {
     const r = lerp(o.r0, o.r1, easeOut3(k)); const span = o.span || Math.PI * 2; const n = o.seg || 40;
+    if (texReady && !o.tilt && !o.span) groundImage("Ring", o.ink ? C.black : C.white, center, r * 1.16, 0, (1 - k) * 0.9, !o.ink);
     const wd = o.width * (1 - easeOut3(k)); const a = 1 - k * k;
     ctx.lineCap = "round";
     for (let i = 0; i < n; i++) {
@@ -288,6 +291,9 @@ function cracks(center, o) {
       const sq = Math.abs(dot(norm(sub(cam.pos, center)), [0, 1, 0])) + 0.15; ctx.scale(1, Math.min(1, sq));
       const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rr); g.addColorStop(0, `rgba(${C.black},${0.45 * fadeA})`); g.addColorStop(1, `rgba(${C.black},0)`);
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rr, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
+    if (texReady) { const spread = lerp(0.3, 1, easeOut3(clamp(age / o.spread, 0, 1)));
+      if (o.pattern === "slash") groundImage("Crack", o.color, add(center, [0, 0.03, 0]), o.radius * 1.6 * spread, 0, 0.85 * fadeA, !!o.glow, o.length / (o.radius * 3.2), o.forward);
+      else groundImage("Crack", o.color, add(center, [0, 0.03, 0]), o.radius * 1.15 * spread, o.rot ??= rnd(0, 6.28), 0.9 * fadeA, !!o.glow); }
     ctx.lineCap = "round";
     for (const [a, b, dist] of lines) {
       if (age < dist * 0.012) continue;
@@ -337,6 +343,7 @@ function runeCircle(center, o) {
     const rot = age * o.rotSpeed; const c = Math.cos(rot), s = Math.sin(rot);
     const R = p => [p[0] * c - p[2] * s, p[1], p[0] * s + p[2] * c];
     const fade = age > o.draw + o.hold ? 1 - (age - o.draw - o.hold) / o.fade : 1;
+    if (texReady) groundImage("Rune", C.white, center, o.radius * 1.04, rot, fade * clamp(age / o.draw, 0, 1) * 0.9, true);
     ctx.lineCap = "round";
     ctx.globalCompositeOperation = "lighter";
     for (const [a, b, st] of segs) {
@@ -480,7 +487,7 @@ const SPELLS = [
   time: [["0.00", "ink wisps + 10 pages spiral in (0.9 s)"], ["0.90", "book snaps together (x1.15 pop)"], ["1.02", "8 rune lines etch, 0.07 s apart"], ["2.18", "cover flips open (0.3 s), Small flash"], ["2.48", "8 glyphs + 2 orbit trails (2 s)"], ["4.48", "faint idle glow (3 s), fade 0.6 s"]],
   cast() {
     const book = add(char.pos, [1.3, 4.2, -0.4]);
-    emit(45, { pos: () => add(book, mul(randUnit(), 4.5)), vel: p => mul(norm(sub(book, p)), rnd(5, 6)), life: [0.8, 0.9], size: [1.2, 0.2], kind: "ink", color: C.black, fadeIn: 0.2 });
+    emit(45, { tex: "InkWisp", pos: () => add(book, mul(randUnit(), 4.5)), vel: p => mul(norm(sub(book, p)), rnd(5, 6)), life: [0.8, 0.9], size: [1.2, 0.2], kind: "ink", color: C.black, fadeIn: 0.2 });
     const pages = []; for (let i = 0; i < 16; i++) pages.push({ a: i / 16 * Math.PI * 2, h: rnd(-2.5, 2.5), tum: rnd(-3, 3) });
     let cover = 0, formed = false, glowOn = 0, bob = 0;
     const B = custom({ dur: 8.2, layer: 2, update(dt, age) { if (age > 4.5) bob = Math.sin(age * 2.4) * 0.12; }, draw(k, age) {
@@ -513,7 +520,7 @@ const SPELLS = [
       custom({ dur: 2, update(dt) { this.w = (this.w || 0) + dt; if (this.w >= 0.1) { this.w = 0; const i = Math.floor(Math.random() * 12);
           bolt(() => [glyphPos(i), glyphPos((i + 1) % 12)], { seg: 5, amp: 0.35, width: 0.09, end: 0.5, dur: 0.14, fade: 0.06, flicker: 0.04 }); }
         this.e = (this.e || 0) + dt; while (this.e >= 0.05) { this.e -= 0.05;
-          emit(5, { pos: () => { const a = rnd(0, 6.28); return add(char.pos, [Math.cos(a) * 4.5, 0.3, Math.sin(a) * 4.5]); }, vel: p => { const r = sub(p, char.pos); return add([0, rnd(3, 6), 0], mul(norm([-r[2], 0, r[0]]), 4)); }, acc: [0, 5, 0], life: [0.8, 1.3], size: [0.6, 2.2], kind: "ink", color: C.black, alpha: 0.85 });
+          emit(5, { tex: "InkWisp", pos: () => { const a = rnd(0, 6.28); return add(char.pos, [Math.cos(a) * 4.5, 0.3, Math.sin(a) * 4.5]); }, vel: p => { const r = sub(p, char.pos); return add([0, rnd(3, 6), 0], mul(norm([-r[2], 0, r[0]]), 4)); }, acc: [0, 5, 0], life: [0.8, 1.3], size: [0.6, 2.2], kind: "ink", color: C.black, alpha: 0.85 });
           emit(4, { pos: () => { const a = rnd(0, 6.28); return add(char.pos, [Math.cos(a) * 4.5, 0.3, Math.sin(a) * 4.5]); }, vel: () => [0, rnd(4, 9), 0], drag: 1, life: [0.8, 1.4], size: [0.35, 0] }); } }, draw() {} });
       custom({ dur: 2.35, layer: 3, draw(k, age) { const fade = clamp(age / 0.35, 0, 1) * (age > 2 ? 1 - (age - 2) / 0.35 : 1);
         for (let i = 0; i < 12; i++) { const a = age * 0.6 + i / 12 * Math.PI * 2; const p = add(char.pos, [Math.cos(a) * 4, 2.8 + Math.sin(age * 2 + i) * 0.15, Math.sin(a) * 4]); const q = proj(p); if (!q) continue;
@@ -568,9 +575,9 @@ const SPELLS = [
     sphereBurst(add(char.pos, [0, 2.8, 0]), { r0: 1, r1: 8, dur: 0.6, ff: true }); shake(...SHAKE.Light);
     let arcT = 0, pulseT = 0, accI = 0, accS = 0;
     const loop = custom({ dur: 1e9, layer: 2, update(dt) {
-        accF += dt * 55; while (accF >= 1) { accF--; emit(1, { pos: () => add(feet(), [rnd(-2, 2), 0.1, rnd(-2, 2)]), vel: () => [rnd(-0.5, 0.5), rnd(5, 9), rnd(-0.5, 0.5)], acc: [0, 6, 0], life: [0.5, 0.9], size: [1.6, 0], kind: "ink", color: C.black, streak: 1.2 }); }
+        accF += dt * 55; while (accF >= 1) { accF--; emit(1, { tex: "Fire", pos: () => add(feet(), [rnd(-2, 2), 0.1, rnd(-2, 2)]), vel: () => [rnd(-0.5, 0.5), rnd(5, 9), rnd(-0.5, 0.5)], acc: [0, 6, 0], life: [0.5, 0.9], size: [1.6, 0], kind: "ink", color: C.black, streak: 1.2 }); }
         accG += dt * 6; while (accG >= 1) { accG--; emit(1, { pos: add(feet(), [0, 0.3, 0]), vel: [0, 0, 0], life: [0.8, 1], size: [4, 6], color: C.white, alpha: 0.35, fadeIn: 0.3 }); }
-        accI += dt * 30; while (accI >= 1) { accI--; emit(1, { pos: () => { const a = rnd(0, 6.28); return add(feet(), [Math.cos(a) * 2, 0.2, Math.sin(a) * 2]); }, vel: () => [0, rnd(10, 16), 0], life: [0.6, 1], size: [2, 0], kind: "ink", color: C.black, alpha: 0.8, streak: 0.6 }); }
+        accI += dt * 30; while (accI >= 1) { accI--; emit(1, { tex: "InkWisp", pos: () => { const a = rnd(0, 6.28); return add(feet(), [Math.cos(a) * 2, 0.2, Math.sin(a) * 2]); }, vel: () => [0, rnd(10, 16), 0], life: [0.6, 1], size: [2, 0], kind: "ink", color: C.black, alpha: 0.8, streak: 0.6 }); }
         accS += dt * 18; while (accS >= 1) { accS--; emit(1, { pos: () => add(feet(), [rnd(-2, 2), 0.2, rnd(-2, 2)]), vel: () => [0, rnd(6, 12), 0], life: [0.5, 0.9], size: [0.3, 0], streak: 2 }); }
         arcT += dt; if (arcT >= 0.3) { arcT = 0; crackle(add(char.pos, [0, 2.8, 0]), 3.2, 2, { seg: 6, amp: 0.6, width: 0.12, end: 0.3, dur: 0.16, fade: 0.06, flicker: 0.04 }); }
         pulseT += dt; if (pulseT >= 1.1) { pulseT = 0; ring(add(char.pos, [0, 0.06, 0]), { r0: 2, r1: 12, dur: 0.7, width: 0.4, seg: 28 }); }
@@ -623,7 +630,7 @@ const SPELLS = [
   cast() {
     const g = TARGET;
     custom({ dur: 2.4, update(dt) { this.f = (this.f || 0) + dt; while (this.f >= 0.04) { this.f -= 0.04;
-      emit(6, { pos: () => { const a = rnd(0, 6.28); return add(g, [Math.cos(a) * 9, 0.2, Math.sin(a) * 9]); }, vel: () => [0, rnd(6, 12), 0], life: [0.4, 0.7], size: [1.6, 0], color: C.crimsonB, alpha: 0.85, streak: 0.8 }); } }, draw() {} });
+      emit(6, { tex: "Fire", pos: () => { const a = rnd(0, 6.28); return add(g, [Math.cos(a) * 9, 0.2, Math.sin(a) * 9]); }, vel: () => [0, rnd(6, 12), 0], life: [0.4, 0.7], size: [1.6, 0], color: C.crimsonB, alpha: 0.85, streak: 0.8 }); } }, draw() {} });
     runeCircle(add(g, [0, 0.12, 0]), { radius: 9, inner: 0.78, points: 5, step: 2, ticks: 24, tick: 0.8, width: 0.22, draw: 0.8, hold: 1.6, fade: 0.6, rotSpeed: 0.4, ground: true });
     at(0.8, () => {
       rocks(g, { count: 14, radius: 6, size: [1.4, 3], tilt: [20, 45], jitter: 1, stagger: 0.01, rise: 0.25, hold: 2, sink: 0.6, color: [70, 64, 62] }); punch("Medium"); shake(...SHAKE.Medium);
@@ -631,9 +638,9 @@ const SPELLS = [
         orbitTrail(() => g, { radius: 5, height: 0, speed: 6, tilt: [0, 0, 0], phase: i / 3 * 6.283 + 1.047, rise: 26, width: 1.8, life: 0.5, dur: 1.4, ink: true }); }
       custom({ dur: 1.4, layer: 3, update(dt) { this.acc = (this.acc || 0.05) + dt; while (this.acc >= 0.05) { this.acc -= 0.05;
           const base = () => add(g, [rnd(-4, 4), rnd(0, 2), rnd(-4, 4)]);
-          emit(7, { pos: base, vel: () => [rnd(-1, 1), rnd(30, 45), rnd(-1, 1)], life: [0.6, 0.9], size: [3, 0], kind: "ink", color: C.black, streak: 0.8 });
-          emit(5, { pos: base, vel: () => [rnd(-1, 1), rnd(28, 40), rnd(-1, 1)], life: [0.5, 0.8], size: [2.4, 0], color: C.crimsonB, alpha: 0.9, streak: 0.8 });
-          emit(3, { pos: base, vel: () => [rnd(-6, 6), rnd(18, 34), rnd(-6, 6)], life: [0.9, 1.6], size: [0.35, 0], color: C.crimsonB, drag: 1.5, acc: [0, 4, 0] });
+          emit(7, { tex: "Fire", pos: base, vel: () => [rnd(-1, 1), rnd(30, 45), rnd(-1, 1)], life: [0.6, 0.9], size: [3, 0], kind: "ink", color: C.black, streak: 0.8 });
+          emit(5, { tex: "Fire", pos: base, vel: () => [rnd(-1, 1), rnd(28, 40), rnd(-1, 1)], life: [0.5, 0.8], size: [2.4, 0], color: C.crimsonB, alpha: 0.9, streak: 0.8 });
+          emit(3, { tex: "Ember", pos: base, vel: () => [rnd(-6, 6), rnd(18, 34), rnd(-6, 6)], life: [0.9, 1.6], size: [0.35, 0], color: C.crimsonB, drag: 1.5, acc: [0, 4, 0] });
           emit(2, { pos: base, vel: () => [rnd(-2, 2), rnd(14, 22), rnd(-2, 2)], life: [1, 1.5], size: [3, 8], kind: "ink", color: C.smoke, alpha: 0.6 }); } },
         draw(k) { const q = proj(add(g, [0, 4, 0])); if (!q) return; const fl = rnd(0.6, 1.2) * (1 - k); const r = 26 * q.s * 0.6;
           const gr = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r); gr.addColorStop(0, `rgba(${C.crimsonB},${0.45 * fl})`); gr.addColorStop(1, `rgba(${C.crimsonB},0)`);
@@ -644,7 +651,7 @@ const SPELLS = [
       bossHit(core, g, { impact: "Heavy", punch: "Heavy", focus: { count: 36, inner: 0.08, lmin: 0.25, lmax: 0.65, thick: 4, dur: 0.35, t: 0.1 },
         spheres: [{ r0: 1, r1: 9, dur: 0.4 }, { r0: 2, r1: 15, dur: 0.7, ff: true, color: C.crimsonB, delay: 0.05 }] });
       custom({ dur: 2.5, update(dt) { this.acc = (this.acc || 0) + dt; while (this.acc >= 0.1) { this.acc -= 0.1;
-        emit(4, { pos: () => add(g, [rnd(-9, 9), rnd(0, 2), rnd(-9, 9)]), vel: () => [rnd(-1, 1), rnd(0.5, 2), rnd(-1, 1)], acc: [0, 1, 0], life: [1.5, 2.5], size: [0.25, 0], color: C.crimsonB }); } }, draw() {} }); });
+        emit(4, { tex: "Ember", pos: () => add(g, [rnd(-9, 9), rnd(0, 2), rnd(-9, 9)]), vel: () => [rnd(-1, 1), rnd(0.5, 2), rnd(-1, 1)], acc: [0, 1, 0], life: [1.5, 2.5], size: [0.25, 0], color: C.crimsonB }); } }, draw() {} }); });
   }},
 { id: "FrostRequiem", key: "6", name: "Frost Requiem", cam: { pos: v(12, 8, -10), look: v(0, 2, 13) },
   desc: "Sharp pale-cyan crystal spikes burst out of the ground one after another in a line from the caster to the target, each with a white rim glow. Frost mist rolls along the floor, white shard particles shatter outward at the target, and a frozen star-pattern crack spreads. After 1.5 s every spike shatters into tumbling glass fragments. Boss tier: a crown of nine giant crystals erupts at the target with 18 ice rocks, a blizzard swirls for 1.6 s, and the hit adds impact frames, focus lines and a pale-cyan shell. The shatter sends out a cyan ring.",
@@ -657,8 +664,8 @@ const SPELLS = [
       const last = i === n - 1; const along = last ? dist : Math.min(3 + i * 4, dist); const p = add(add(start, mul(dir, along)), mul(side, last ? 0 : rnd(-1.2, 1.2)));
       const sc = last ? 1.6 : 1; const sp = { p, h: rnd(4, 8) * sc, w: rnd(0.8, 1.5) * sc, lean: [rnd(-0.35, 0.35), rnd(-0.35, 0.35)], born: now, dead: false };
       spikes.push(sp);
-      emit(4, { pos: () => add(p, [rnd(-1, 1), 0.3, rnd(-1, 1)]), vel: () => [rnd(-5, 5), rnd(0, 0.3), rnd(-5, 5)], life: [1.2, 1.8], size: [2, 6], color: C.cyan, alpha: 0.35, drag: 1, fadeIn: 0.3 });
-      emit(6, { pos: add(p, [0, 1, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white });
+      emit(4, { tex: "Smoke", pos: () => add(p, [rnd(-1, 1), 0.3, rnd(-1, 1)]), vel: () => [rnd(-5, 5), rnd(0, 0.3), rnd(-5, 5)], life: [1.2, 1.8], size: [2, 6], color: C.cyan, alpha: 0.35, drag: 1, fadeIn: 0.3 });
+      emit(6, { tex: "Snow", pos: add(p, [0, 1, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white });
       spikeDraw(sp, 1.5 + (n - i) * 0.04);
     });
     function spikeDraw(sp, life) { const p = sp.p;
@@ -672,7 +679,7 @@ const SPELLS = [
         ctx.beginPath(); ctx.moveTo(bf.x, bf.y); ctx.lineTo(tq.x, tq.y); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1; ctx.stroke(); } }); }
     const tImp = (n - 1) * 0.04;
     at(tImp, () => { const imp = add(end, [0, 4, 0]); flash(imp, "Medium");
-      emit(60, { pos: imp, vel: () => mul(randUnit(), rnd(35, 60)), acc: [0, -20, 0], drag: 4, life: [0.4, 0.8], size: [0.7, 0], color: C.cyan, streak: 1 });
+      emit(60, { tex: "Shard", pos: imp, vel: () => mul(randUnit(), rnd(35, 60)), acc: [0, -20, 0], drag: 4, life: [0.4, 0.8], size: [0.7, 0], color: C.cyan, streak: 1 });
       ring(add(end, [0, 0.06, 0]), { r0: 1, r1: 16, dur: 0.45, width: 0.9, seg: 28 });
       cracks(end, { radius: 10, count: 8, segs: 4, jitter: 0.08, thick: 0.18, color: C.cyan, glow: true, pattern: "star", spread: 0.35, hold: 1.5, fade: 2 }); shake(...SHAKE.Medium);
       bossHit(imp, end, { impact: "Medium", punch: "Medium", focus: { count: 34, inner: 0.08, lmin: 0.25, lmax: 0.65, thick: 3, dur: 0.35, t: 0.15 },
@@ -682,10 +689,10 @@ const SPELLS = [
       for (let c = 0; c < 9; c++) at(c * 0.02, () => { const a = c / 9 * 6.283 + rnd(-0.3, 0.3); const out = [Math.cos(a), 0, Math.sin(a)]; const p = add(end, mul(out, 2.5));
         const sp = { p, h: rnd(9, 18) / 0.6, w: rnd(1.8, 3.2), lean: [out[0] * rnd(0.3, 1.1), out[2] * rnd(0.3, 1.1)], dead: false }; spikes.push(sp); spikeDraw(sp, 1.5 + 0.2); });
       custom({ dur: 1.6, update(dt) { this.b = (this.b || 0) + dt; while (this.b >= 0.06) { this.b -= 0.06;
-        emit(10, { pos: () => add(end, [rnd(-10, 10), rnd(0.5, 4), rnd(-10, 10)]), vel: p => { const r = sub(p, end); return add(mul(norm([-r[2], 0, r[0]]), rnd(8, 16)), [0, rnd(-1, 2), 0]); }, drag: 1, acc: [0, -2, 0], life: [1, 1.6], size: [0.4, 0], color: C.white }); } }, draw() {} }); });
+        emit(10, { tex: "Snow", pos: () => add(end, [rnd(-10, 10), rnd(0.5, 4), rnd(-10, 10)]), vel: p => { const r = sub(p, end); return add(mul(norm([-r[2], 0, r[0]]), rnd(8, 16)), [0, rnd(-1, 2), 0]); }, drag: 1, acc: [0, -2, 0], life: [1, 1.6], size: [0.4, 0], color: C.white }); } }, draw() {} }); });
     at(tImp + 1.5, () => ring(add(end, [0, 0.06, 0]), { r0: 2, r1: 22, dur: 0.5, width: 0.8, seg: 32 }));
     at(tImp + 1.5, () => spikes.forEach(sp => { sp.dead = true; shards(sp.p, { count: 8, size: [0.2, 0.5], radius: 0.8, rise: [0.5, 3], spread: 3, riseT: 0.25, hangT: 0.1, fallT: 0.45, fallDist: 5, color: C.ice });
-      emit(10, { pos: add(sp.p, [0, sp.h * 0.4, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white }); }));
+      emit(10, { tex: "Snow", pos: add(sp.p, [0, sp.h * 0.4, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white }); }));
   }},
 { id: "GaleReaper", key: "7", name: "Gale Reaper", cam: { pos: v(3, 7, -11), look: v(0, 2.5, 18) },
   desc: "A fast crescent wind slash fired forward at 140 studs/s. A huge curved white blade with black smoky edges travels to the target, leaving speed lines, ink wisps and two wind spirals. On contact it splits into four smaller fading crescents, kicks up dust and debris, and carves a long slash-shaped crack decal. Boss tier: three crescents fire 0.11 s apart at alternating angles on parallel paths; rocks erupt along both sides of the slash line and the final hit adds impact frames, focus lines, an FOV punch and a black ForceField shell.",
@@ -812,13 +819,50 @@ function frame(t) {
 
   updateHud();
   if (freezeNext) { freezeNext = false; window.__preview.freezeOnInvert = false; window.__preview.frozen = true; return; }
+  if (window.__preview && window.__preview.stopAt != null && now - castAt >= window.__preview.stopAt) { window.__preview.stopAt = null; window.__preview.frozen = true; return; }
   if (autoBox.checked && current && now - castAt > (current.loop ? 5 : 6.5)) {
     if (current.loop && auraActive) { auraStop(); castAt = now - 3.5; }
     else next();
   }
   requestAnimationFrame(frame);
 }
+// ---------- texture pack (assets/textures via textures.js) ----------
+const TEX = {}; let texReady = false;
+(function loadTextures() {
+  const src = window.GRIMOIRE_TEX; if (!src) return; let pending = 0;
+  for (const [key, t] of Object.entries(src)) { pending++; const img = new Image();
+    img.onload = () => { TEX[key] = { img, grid: t.grid, fw: img.width / t.grid }; if (--pending === 0) texReady = true; };
+    img.src = t.src; }
+})();
+const tintCache = new Map();
+function tinted(key, rgb) { // texture multiplied by a colour, alpha preserved (like Roblox Color)
+  const id = key + "|" + rgb; let c = tintCache.get(id); if (c) return c;
+  const t = TEX[key]; if (!t) return null;
+  const cv = document.createElement("canvas"); cv.width = t.img.width; cv.height = t.img.height; const x = cv.getContext("2d");
+  x.drawImage(t.img, 0, 0); x.globalCompositeOperation = "multiply"; x.fillStyle = `rgb(${rgb})`; x.fillRect(0, 0, cv.width, cv.height);
+  x.globalCompositeOperation = "destination-in"; x.drawImage(t.img, 0, 0);
+  c = { canvas: cv, grid: t.grid, fw: t.fw }; tintCache.set(id, c); return c;
+}
+// Draws a texture flat on the ground (tiled affine patches approximate the perspective).
+function groundImage(key, rgb, center, radius, rot, alpha, additive, lengthScale = 1, forward = null) {
+  const T = tinted(key, rgb); if (!T || alpha <= 0.01) return;
+  const f = forward || [Math.cos(rot), 0, Math.sin(rot)], r = [-f[2], 0, f[0]];
+  const n = 4, W0 = T.canvas.width, H0 = T.canvas.height;
+  const P = (i, j) => proj(add(add(center, mul(r, (i / n * 2 - 1) * radius)), mul(f, (j / n * 2 - 1) * radius * lengthScale)));
+  ctx.save(); ctx.globalAlpha = alpha; if (additive) ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    const q0 = P(i, j), q1 = P(i + 1, j), q2 = P(i, j + 1), q3 = P(i + 1, j + 1); if (!q0 || !q1 || !q2 || !q3) continue;
+    const sw = W0 / n, sh = H0 / n;
+    ctx.save(); ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.lineTo(q3.x, q3.y); ctx.lineTo(q2.x, q2.y); ctx.closePath();
+    ctx.lineWidth = 1; ctx.clip();
+    ctx.setTransform(DPR * (q1.x - q0.x) / sw, DPR * (q1.y - q0.y) / sw, DPR * (q2.x - q0.x) / sh, DPR * (q2.y - q0.y) / sh, DPR * q0.x, DPR * q0.y);
+    ctx.drawImage(T.canvas, i * sw, j * sh, sw + 1, sh + 1, 0, 0, sw + 1, sh + 1); ctx.restore();
+  }
+  ctx.restore();
+}
+
 function drawParticle(p) {
+  if (texReady && TEX[p.tex]) return drawTexturedParticle(p);
   const q = proj(p.pos); if (!q) return; const k = p.age / p.life;
   const size = lerp(p.s0, p.s1, k) * q.s * 0.5; if (size < 0.3) return;
   let a = p.alpha * (p.fadeIn ? Math.min(1, p.age / p.fadeIn) : 1) * (1 - k * k);
@@ -833,6 +877,22 @@ function drawParticle(p) {
   if (p.kind === "ink") { g.addColorStop(0, `rgba(${p.color},${a})`); g.addColorStop(0.6, `rgba(${p.color},${a * 0.8})`); g.addColorStop(1, `rgba(${p.color},0)`); }
   else { g.addColorStop(0, `rgba(${p.color},${a})`); g.addColorStop(0.4, `rgba(${p.color},${a * 0.5})`); g.addColorStop(1, `rgba(${p.color},0)`); }
   ctx.fillStyle = g; ctx.fillRect(q.x - size, q.y - size, size * 2, size * 2);
+}
+
+function drawTexturedParticle(p) {
+  const q = proj(p.pos); if (!q) return; const k = p.age / p.life;
+  const size = lerp(p.s0, p.s1, k) * q.s * 0.62; if (size < 0.35) return;
+  const a = p.alpha * (p.fadeIn ? Math.min(1, p.age / p.fadeIn) : 1) * (1 - k * k);
+  const T = tinted(p.tex, p.color); if (!T) return;
+  const frames = T.grid * T.grid; const fi = Math.min(frames - 1, Math.floor(k * frames));
+  const sx = (fi % T.grid) * T.fw, sy = Math.floor(fi / T.grid) * T.fw;
+  ctx.save(); ctx.globalAlpha = clamp(a, 0, 1); ctx.translate(q.x, q.y);
+  if (p.streak) { const v2 = proj(add(p.pos, mul(p.vel, -0.02 * p.streak)));
+    if (v2) { const dx = q.x - v2.x, dy = q.y - v2.y, L = Math.hypot(dx, dy); const st = clamp(1 + L / Math.max(size, 1), 1, p.tex === "Fire" ? 1.8 : 4);
+      ctx.rotate(Math.atan2(dy, dx) + Math.PI / 2); ctx.scale(1 / Math.sqrt(st), st); } }
+  else ctx.rotate(p.rot + p.rs * p.age);
+  ctx.drawImage(T.canvas, sx, sy, T.fw, T.fw, -size, -size, size * 2, size * 2);
+  ctx.restore();
 }
 
 // ---------- UI ----------
