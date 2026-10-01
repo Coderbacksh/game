@@ -6,7 +6,9 @@
 	locally through VFXController. Every client (including the caster)
 	renders every cast, so all players see the same spell.
 
-	PlaySpellVFX args: (casterUserId, spellName, origin, targetPosition, active?)
+	PlaySpellVFX args: (caster, spellName, origin, targetPosition, active?)
+	`caster` is a player's UserId, or the boss Model itself for NPC casts
+	(SpellService.CastFromModel).
 	`origin` is the caster's position on the server at cast time; it is used
 	as the target fallback when a loop-stop arrives without one.
 
@@ -26,12 +28,17 @@ local remotes = ReplicatedStorage:WaitForChild(Network.Folder)
 local playRemote = remotes:WaitForChild(Network.PlayRemote) :: RemoteEvent
 
 playRemote.OnClientEvent:Connect(
-	function(casterUserId: number, spellName: string, origin: Vector3, targetPosition: Vector3?, active: boolean?)
+	function(caster: unknown, spellName: string, origin: Vector3, targetPosition: Vector3?, active: boolean?)
 		if typeof(spellName) ~= "string" or not VFXController.Has(spellName) then
 			return
 		end
-		local caster = Players:GetPlayerByUserId(casterUserId)
-		local character = caster and caster.Character
+		local character: Model? = nil
+		if typeof(caster) == "number" then
+			local player = Players:GetPlayerByUserId(caster)
+			character = player and player.Character
+		elseif typeof(caster) == "Instance" and caster:IsA("Model") then
+			character = caster -- world boss / NPC
+		end
 		if character == nil then
 			-- Caster left or their character has not streamed in; nothing to attach to.
 			return

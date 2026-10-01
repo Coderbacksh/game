@@ -3,7 +3,8 @@
 	VFXTestBinds (debug only)
 	=========================
 	Keys 1-8 cast each spell at the mouse hit position, clamped to the
-	spell's MaxRange from Config. A small on-screen label lists the binds
+	spell's MaxRange from Config. Shift + 1-8 makes the debug world boss
+	(spawned by SpellServer) cast that spell at you instead. A small on-screen label lists the binds
 	(looping spells show [ON] while active).
 
 	Disable everything here by setting Config.DEBUG = false.
@@ -88,7 +89,7 @@ local function buildLabel()
 	local frame = Instance.new("Frame")
 	frame.AnchorPoint = Settings.AnchorPoint
 	frame.Position = Settings.Position
-	frame.Size = UDim2.fromOffset(Settings.Width, Settings.LineHeight * (#ordered + 1) + Settings.Padding * 2)
+	frame.Size = UDim2.fromOffset(Settings.Width, Settings.LineHeight * (#ordered + 2) + Settings.Padding * 2)
 	frame.BackgroundColor3 = Settings.BackgroundColor
 	frame.BackgroundTransparency = Settings.BackgroundTransparency
 	frame.BorderSizePixel = 0
@@ -122,6 +123,7 @@ local function buildLabel()
 		local keyName = UserInputService:GetStringForKeyCode(meta.Key)
 		lines[meta.Name] = addLine(`[{keyName}] {meta.DisplayName}`, index)
 	end
+	addLine(Settings.BossHint, #ordered + 1)
 end
 
 local function refreshLine(meta: Config.SpellMeta)
@@ -163,6 +165,15 @@ UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: 
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if root == nil or not root:IsA("BasePart") then
+		return
+	end
+	local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+		or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+	if shift then
+		local bossRemote = remotes:FindFirstChild(Config.Boss.DebugRemote)
+		if bossRemote and bossRemote:IsA("RemoteEvent") then
+			bossRemote:FireServer(meta.Name)
+		end
 		return
 	end
 	castRemote:FireServer(meta.Name, mouseTarget(root, meta.MaxRange))

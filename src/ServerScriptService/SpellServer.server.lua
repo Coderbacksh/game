@@ -2,235 +2,94 @@
 --[[
 	SpellServer
 	===========
-	Authoritative spell networking. The server never builds particles.
+	Boots the spell networking by requiring SpellService (which creates the
+	Remotes folder, validates player casts and broadcasts PlaySpellVFX).
 
-	Creates ReplicatedStorage.Remotes with two RemoteEvents:
-	  CastSpell    (client -> server)  (spellName, targetPosition)
-	  PlaySpellVFX (server -> clients) (casterUserId, spellName, origin,
-	                                    targetPosition, active?)
+	To make a WORLD BOSS cast from your own server code:
 
-	Validation for every cast:
-	  * argument types (string / finite Vector3)
-	  * the spell exists in Config
-	  * the caster is alive and has a HumanoidRootPart
-	  * global anti-spam interval + per-player, per-spell cooldown
-	  * target within the spell's MaxRange (+ tolerance)
+	  local SpellService = require(game:GetService("ServerScriptService").SpellService)
+	  SpellService.CastFromModel(bossModel, "CelestialVerdict", targetPosition)
 
-	Looping spells (AbyssalAura) are toggles: the server tracks whether each
-	player's loop is active and sends `active` so every client agrees. Loops
-	are stopped on death, respawn, leaving, or after MaxDuration.
-
-	Handlers never yield (task.delay only schedules work).
+	When Config.DEBUG is true this script also spawns a test boss (a black
+	R15 rig scaled by Config.Boss.DebugScale) and lets testers make it cast
+	with Shift + 1-8 (see VFXTestBinds.client.lua).
 ]]
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local Workspace = game:GetService("Workspace")
 
 local Config = require(ReplicatedStorage.VFX.Config)
+local SpellService = require(ServerScriptService.SpellService)
 
-local Network = Config.Network
-
----------------------------------------------------------------------------
--- Remotes (created at runtime)
----------------------------------------------------------------------------
-local function ensureFolder(): Folder
-	local existing = ReplicatedStorage:FindFirstChild(Network.Folder)
-	if existing and existing:IsA("Folder") then
-		return existing
-	end
-	local folder = Instance.new("Folder")
-	folder.Name = Network.Folder
-	folder.Parent = ReplicatedStorage
-	return folder
-end
-
-local function ensureRemote(folder: Folder, name: string): RemoteEvent
-	local existing = folder:FindFirstChild(name)
-	if existing and existing:IsA("RemoteEvent") then
-		return existing
-	end
-	local remote = Instance.new("RemoteEvent")
-	remote.Name = name
-	remote.Parent = folder
-	return remote
-end
-
-local remotes = ensureFolder()
-local castRemote = ensureRemote(remotes, Network.CastRemote)
-local playRemote = ensureRemote(remotes, Network.PlayRemote)
-
----------------------------------------------------------------------------
--- Per-player state
----------------------------------------------------------------------------
-type PlayerState = {
-	LastCast: number,
-	ReadyAt: { [string]: number },
-	-- spellName -> token of the active loop (nil when not active)
-	ActiveLoops: { [string]: number },
-}
-
-local states: { [Player]: PlayerState } = {}
-local nextToken = 0
-
-local function getState(player: Player): PlayerState
-	local existing = states[player]
-	if existing then
-		return existing
-	end
-	local state: PlayerState = { LastCast = -math.huge, ReadyAt = {}, ActiveLoops = {} }
-	states[player] = state
-	return state
-end
-
-local function isFiniteVector(v: Vector3): boolean
-	for _, n in { v.X, v.Y, v.Z } do
-		if n ~= n or n == math.huge or n == -math.huge then
-			return false
-		end
-	end
-	return true
-end
-
-local function aliveRoot(player: Player): BasePart?
-	local character = player.Character
-	if character == nil then
-		return nil
-	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if humanoid == nil or humanoid.Health <= 0 then
-		return nil
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if root and root:IsA("BasePart") then
-		return root
-	end
-	return nil
-end
-
--- Ends every active loop for a player and tells all clients.
-local function stopLoops(player: Player)
-	local state = states[player]
-	if state == nil then
-		return
-	end
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local origin = if root and root:IsA("BasePart") then root.Position else Vector3.zero
-	for spellName in state.ActiveLoops do
-		state.ActiveLoops[spellName] = nil
-		playRemote:FireAllClients(player.UserId, spellName, origin, origin, false)
-	end
+if not Config.DEBUG then
+	return
 end
 
 ---------------------------------------------------------------------------
--- Cast handling
+-- Debug test boss
 ---------------------------------------------------------------------------
-castRemote.OnServerEvent:Connect(function(player: Player, spellName: unknown, targetPosition: unknown)
-	if typeof(spellName) ~= "string" or typeof(targetPosition) ~= "Vector3" then
-		return
-	end
-	if not isFiniteVector(targetPosition) then
-		return
-	end
-	local meta = Config.GetSpellMeta(spellName)
-	if meta == nil then
-		return
-	end
-	local root = aliveRoot(player)
-	if root == nil then
-		return
-	end
-
-	local state = getState(player)
-	local now = os.clock()
-	if now - state.LastCast < Network.GlobalCastInterval then
-		return
-	end
-	if now < (state.ReadyAt[spellName] or 0) then
-		return
-	end
-
-	local stopping = meta.Looping and state.ActiveLoops[spellName] ~= nil
-	if not stopping and (targetPosition - root.Position).Magnitude > meta.MaxRange + Network.RangeTolerance then
-		return
-	end
-
-	state.LastCast = now
-	state.ReadyAt[spellName] = now + meta.Cooldown
-	local origin = root.Position
-
-	if not meta.Looping then
-		playRemote:FireAllClients(player.UserId, spellName, origin, targetPosition)
-		return
-	end
-
-	if stopping then
-		state.ActiveLoops[spellName] = nil
-		playRemote:FireAllClients(player.UserId, spellName, origin, targetPosition, false)
-		return
-	end
-
-	nextToken += 1
-	local token = nextToken
-	state.ActiveLoops[spellName] = token
-	playRemote:FireAllClients(player.UserId, spellName, origin, targetPosition, true)
-
-	local maxDuration = meta.MaxDuration
-	if maxDuration then
-		task.delay(maxDuration, function()
-			local current = states[player]
-			if current and current.ActiveLoops[spellName] == token then
-				current.ActiveLoops[spellName] = nil
-				local position = if root.Parent then root.Position else origin
-				playRemote:FireAllClients(player.UserId, spellName, position, position, false)
-			end
-		end)
-	end
+local Boss = Config.Boss
+local debugRemote = SpellService.EnsureRemote(Boss.DebugRemote)
+local boss: Model? = nil
+local lastDebugCast: { [Player]: number } = {}
+Players.PlayerRemoving:Connect(function(player: Player)
+	lastDebugCast[player] = nil
 end)
 
----------------------------------------------------------------------------
--- Lifecycle: stop loops on death / respawn, clear state on leave
----------------------------------------------------------------------------
-local function onCharacterAdded(player: Player, character: Model)
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
+local function spawnBoss(): Model?
+	local description = Instance.new("HumanoidDescription")
+	for _, property in { "HeadColor", "TorsoColor", "LeftArmColor", "RightArmColor", "LeftLegColor", "RightLegColor" } do
+		(description :: any)[property] = Boss.DebugColor
+	end
+	local ok, model = pcall(function()
+		return Players:CreateHumanoidModelFromDescription(description, Enum.HumanoidRigType.R15)
+	end)
+	if not ok or model == nil then
+		warn("[SpellServer] Could not create the debug boss:", model)
+		return nil
+	end
+	model.Name = Boss.DebugName
+	model:ScaleTo(Boss.DebugScale)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
 	if humanoid then
-		humanoid.Died:Once(function()
-			stopLoops(player)
-		end)
-	else
-		-- Humanoid not replicated yet; hook it as soon as it appears.
-		local connection: RBXScriptConnection? = nil
-		connection = character.ChildAdded:Connect(function(child: Instance)
-			if child:IsA("Humanoid") then
-				child.Died:Once(function()
-					stopLoops(player)
-				end)
-				if connection then
-					connection:Disconnect()
-				end
-			end
-		end)
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		humanoid.MaxHealth = math.huge
+		humanoid.Health = math.huge
 	end
+	model:PivotTo(CFrame.new(Boss.DebugPosition))
+	model.Parent = Workspace
+	return model
 end
 
-local function onPlayerAdded(player: Player)
-	player.CharacterAdded:Connect(function(character: Model)
-		onCharacterAdded(player, character)
-	end)
-	player.CharacterRemoving:Connect(function()
-		stopLoops(player)
-	end)
-	if player.Character then
-		onCharacterAdded(player, player.Character)
+-- Spawning yields (CreateHumanoidModelFromDescription), so run it in its own thread.
+task.spawn(function()
+	boss = spawnBoss()
+end)
+
+debugRemote.OnServerEvent:Connect(function(player: Player, spellName: unknown)
+	local current = boss
+	if typeof(spellName) ~= "string" or current == nil or current.Parent == nil then
+		return
 	end
-end
-
-Players.PlayerAdded:Connect(onPlayerAdded)
-for _, player in Players:GetPlayers() do
-	onPlayerAdded(player)
-end
-
-Players.PlayerRemoving:Connect(function(player: Player)
-	stopLoops(player)
-	states[player] = nil
+	local now = os.clock()
+	if now - (lastDebugCast[player] or -math.huge) < Boss.DebugCastInterval then
+		return
+	end
+	lastDebugCast[player] = now
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root == nil or not root:IsA("BasePart") then
+		return
+	end
+	-- The boss turns to face the player and casts at them.
+	local bossRoot = current:FindFirstChild("HumanoidRootPart")
+	if bossRoot and bossRoot:IsA("BasePart") then
+		local flatTarget = Vector3.new(root.Position.X, bossRoot.Position.Y, root.Position.Z)
+		if (flatTarget - bossRoot.Position).Magnitude > 1e-3 then
+			current:PivotTo(CFrame.lookAt(bossRoot.Position, flatTarget))
+		end
+	end
+	SpellService.CastFromModel(current, spellName, root.Position)
 end)
