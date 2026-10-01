@@ -50,7 +50,7 @@ canvas { display: block; width: 100%; height: 100%; }
 <div class="wrap">
   <header>
     <h1>Life of Grimoire &middot; Spell VFX</h1>
-    <span class="badge">Concept mockup &middot; not an in-engine capture</span>
+    <span class="badge">World boss tier &middot; concept mockup, not an in-engine capture</span>
   </header>
 
   <div class="stage" id="stage">
@@ -118,7 +118,9 @@ function setCamera(c, instant) { camTarget = c; if (instant) { cam.pos = c.pos.s
 function updateCamera(dt) {
   if (camTarget) { const k = 1 - Math.exp(-dt * 3); cam.pos = lerpV(cam.pos, camTarget.pos, k); cam.look = lerpV(cam.look, camTarget.look, k); }
   cam.f = norm(sub(cam.look, cam.pos)); cam.r = norm(cross([0, 1, 0], cam.f)); cam.u = cross(cam.f, cam.r);
-  cam.focal = (H / 2) / Math.tan((cam.fov * Math.PI / 180) / 2);
+  let fov = 58; for (let i = fovPunch.length - 1; i >= 0; i--) { const p = fovPunch[i]; p.t += dt; if (p.t > p.i + p.o) { fovPunch.splice(i, 1); continue; }
+    fov += p.t < p.i ? p.d * (1 - Math.pow(1 - p.t / p.i, 3)) : p.d * Math.pow(1 - (p.t - p.i) / p.o, 2); }
+  cam.fov = fov; cam.focal = (H / 2) / Math.tan((cam.fov * Math.PI / 180) / 2);
 }
 let shakeX = 0, shakeY = 0;
 function proj(p) {
@@ -141,10 +143,11 @@ const char = { pos: v(0, 0, 0) };
 const TARGET = v(0, 0, 24);
 
 function at(delay, fn) { timers.push({ t: now + delay, fn }); }
-function reset() { parts = []; fx = []; timers = []; shakes = []; dimTarget = 0; screenFlash = 0; auraActive = false; }
+function reset() { parts = []; fx = []; timers = []; shakes = []; dimTarget = 0; screenFlash = 0; auraActive = false; impactSteps = []; fovPunch = []; }
 
 // particles: kind ink|glow ; color rgb string
 function emit(n, o) {
+  n = Math.max(1, Math.round(n * INTENSITY));
   for (let i = 0; i < n; i++) {
     const pos = typeof o.pos === "function" ? o.pos(i) : o.pos.slice();
     const vel = typeof o.vel === "function" ? o.vel(pos, i) : (o.vel ? o.vel.slice() : [0, 0, 0]);
@@ -360,12 +363,84 @@ function orbitTrail(getCenter, o) {
       ctx.lineCap = "butt"; ctx.lineJoin = "round";
       for (let i = 0; i < hist.length - 1; i++) { const q0 = proj(hist[i].p), q1 = proj(hist[i + 1].p); if (!q0 || !q1) continue;
         const a = i / hist.length; ctx.lineWidth = Math.max(0.8, o.width * q0.s);
-        ctx.strokeStyle = o.ink ? `rgba(${C.black},${0.9 * a})` : `rgba(255,255,255,${a})`;
+        ctx.strokeStyle = o.ink ? `rgba(${C.black},${0.9 * a})` : `rgba(${o.color || C.white},${a})`;
         ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke(); }
     }};
   fx.push(obj); return obj;
 }
 function custom(o) { fx.push(o); return o; }
+
+// ---------- boss-tier layers (mirror the new Util modules) ----------
+const INTENSITY = 1.6; // Config.Intensity.Particles
+let impactSteps = [], impactT = 0, fovPunch = [];
+const IMPACT = { // Config.ImpactFrame.Presets: [duration, invert?, whiteOverlay]
+  Medium: [[0.045, false, 0], [0.045, true, 0]],
+  Heavy: [[0.04, false, 0.7], [0.05, true, 0], [0.04, false, 0], [0.06, true, 0]],
+  Ultimate: [[0.05, false, 0.9], [0.06, true, 0], [0.05, false, 0], [0.06, true, 0], [0.08, false, 0]],
+};
+function impactFrame(name) { impactSteps = IMPACT[name].map(x => x.slice()); impactT = 0; }
+const PUNCH = { Small: [4, 0.05, 0.35], Medium: [8, 0.05, 0.5], Heavy: [14, 0.06, 0.7], Ultimate: [24, 0.08, 1.2] };
+function punch(name) { const p = PUNCH[name]; fovPunch.push({ d: p[0], i: p[1], o: p[2], t: 0 }); }
+function sphereBurst(center, o) {
+  fx.push({ delay: o.delay || 0, dur: o.dur, layer: o.ff ? 2.5 : 3, draw(k) {
+    const q = proj(center); if (!q) return; const r = lerp(o.r0, o.r1, 1 - Math.pow(1 - k, 4)) * q.s; const a = (1 - (o.t0 || 0)) * (1 - k * k);
+    if (!o.ff) { ctx.globalCompositeOperation = "lighter"; const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r);
+      g.addColorStop(0, `rgba(255,255,255,${0.9 * a})`); g.addColorStop(0.55, `rgba(255,255,255,${0.45 * a})`); g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = "source-over"; return; }
+    // ForceField shell: shimmering rim, mostly clear in the middle
+    const col = o.color || C.black;
+    const g = ctx.createRadialGradient(q.x, q.y, r * 0.7, q.x, q.y, r);
+    g.addColorStop(0, `rgba(${col},0)`); g.addColorStop(0.88, `rgba(${col},${0.08 * a})`); g.addColorStop(0.97, `rgba(${col},${0.5 * a})`); g.addColorStop(1, `rgba(${col},0)`);
+    if (col !== C.black) ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = `rgba(${col === C.black ? C.white : col},${0.22 * a})`; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) { const rr = r * (0.92 + 0.03 * Math.sin(now * 30 + i * 2)); ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.globalCompositeOperation = "source-over";
+  }});
+}
+const spheres = (c, list) => list.forEach(o => sphereBurst(c, o));
+function rocks(center, o) {
+  for (let i = 0; i < o.count; i++) {
+    const ang = i / o.count * Math.PI * 2 + rnd(-0.12, 0.12); const rad = o.radius + rnd(-o.jitter, o.jitter);
+    const out = [Math.cos(ang), 0, Math.sin(ang)]; const base = add(center, mul(out, rad));
+    rockAt(base, out, o, i * (o.stagger || 0.008));
+  }
+}
+function rocksLine(from, to, o) {
+  const d = norm(sub(to, from)), side = [-d[2], 0, d[0]], L = len(sub(to, from)); const n = Math.max(1, Math.floor(L / o.spacing));
+  for (let i = 0; i <= n; i++) for (const sg of [1, -1]) rockAt(add(add(from, mul(d, i * o.spacing)), mul(side, sg * (o.radius + rnd(-0.6, 0.6)))), mul(side, sg), o, i * (o.stagger || 0.012));
+}
+function rockAt(base, out, o, delay) {
+  const size = rnd(o.size[0], o.size[1]); const tilt = rnd(o.tilt[0], o.tilt[1]) * Math.PI / 180; const sides = 5 + Math.floor(Math.random() * 3);
+  const shape = []; for (let j = 0; j < sides; j++) { const a = j / sides * Math.PI * 2; shape.push([Math.cos(a) * rnd(0.6, 1), Math.sin(a) * rnd(0.6, 1)]); }
+  const shade = o.color || [104, 106, 112]; const rot = rnd(-0.6, 0.6);
+  fx.push({ delay, dur: o.rise + o.hold + o.sink, layer: 0.8, draw(k, age) {
+    let h; if (age < o.rise) { const t = age / o.rise; const c1 = 1.70158, c3 = c1 + 1; h = 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
+    else if (age < o.rise + o.hold) h = 1; else { const t = (age - o.rise - o.hold) / o.sink; h = 1 - t * t; }
+    const top = add(add(base, mul(out, Math.sin(tilt) * size * 0.8 * h)), [0, size * 0.9 * h - size * 0.3, 0]);
+    const qb = proj(base), qt = proj(top); if (!qb || !qt) return; const r = size * qt.s * 0.7;
+    ctx.save(); ctx.translate(qt.x, qt.y); ctx.rotate(rot + (qt.x - qb.x) * 0.002);
+    ctx.beginPath(); shape.forEach(([x, y], j) => j ? ctx.lineTo(x * r, y * r) : ctx.moveTo(x * r, y * r)); ctx.closePath();
+    const g = ctx.createLinearGradient(0, -r, 0, r); g.addColorStop(0, `rgb(${shade.map(c => Math.min(255, c + 40)).join(",")})`); g.addColorStop(1, `rgb(${shade.map(c => c * 0.45).join(",")})`);
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
+    // dark base where it broke through the floor
+    ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(qb.x, qb.y, r * 0.9, r * 0.3, 0, 0, Math.PI * 2); ctx.fill();
+  }});
+}
+function focusLines(world, o) {
+  let lines = [], acc = 1;
+  fx.push({ dur: o.dur, layer: 4.5, update(dt) { acc += dt; if (acc >= 0.04) { acc = 0; lines = []; for (let i = 0; i < o.count; i++) lines.push([rnd(0, 6.283), rnd(o.lmin, o.lmax), rnd(0.35, 1)]); } },
+    draw(k) { const q = proj(world) || { x: W / 2, y: H / 2 }; const sh = Math.min(W, H); const a = (1 - (o.t || 0)) * (1 - k * k);
+      lines.forEach(([ang, L, th]) => { const r0 = o.inner * sh, r1 = r0 + L * sh; const c = Math.cos(ang), s2 = Math.sin(ang); const w = o.thick * th;
+        const g = ctx.createLinearGradient(q.x + c * r0, q.y + s2 * r0, q.x + c * r1, q.y + s2 * r1); g.addColorStop(0, "rgba(255,255,255,0)"); g.addColorStop(0.25, `rgba(255,255,255,${a})`); g.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(q.x + c * r0 - s2 * w * 0.2, q.y + s2 * r0 + c * w * 0.2); ctx.lineTo(q.x + c * r0 + s2 * w * 0.2, q.y + s2 * r0 - c * w * 0.2);
+        ctx.lineTo(q.x + c * r1 + s2 * w, q.y + s2 * r1 - c * w); ctx.lineTo(q.x + c * r1 - s2 * w, q.y + s2 * r1 + c * w); ctx.closePath(); ctx.fill(); }); } });
+}
+// standard boss-tier impact bundle used by most spells
+function bossHit(pos, ground, o) {
+  if (o.impact) impactFrame(o.impact); if (o.punch) punch(o.punch);
+  if (o.focus) focusLines(pos, o.focus); if (o.spheres) spheres(pos, o.spheres); if (o.rocks) rocks(ground, o.rocks);
+}
 
 // ---------- character ----------
 function drawCharacter() {
@@ -401,12 +476,12 @@ let auraActive = false, auraStop = null;
 const CAM_DEFAULT = { pos: v(9, 9, -16), look: v(0, 3, 12) };
 const SPELLS = [
 { id: "GrimoireAwakening", key: "1", name: "Grimoire Awakening", cam: { pos: v(6, 6, -13), look: v(0.6, 3.4, 0) },
-  desc: "Black ink pages spiral in and snap into a floating book above the open hand. White runes etch across the cover as flickering electric lines, the cover flips open with a white flash, then a ring of glyph tiles spins at waist height while two white trails orbit for 2 seconds. The open book settles into a faint idle glow.",
+  desc: "Black ink pages spiral in and snap into a floating book above the open hand. White runes etch across the cover as flickering electric lines, the cover flips open with a white flash, then a ring of glyph tiles spins at waist height while two white trails orbit for 2 seconds. The open book settles into a faint idle glow. Boss tier: the book opening fires impact frames, focus lines, an FOV punch and a white core inside a black ForceField shell; arcs jump between the 12 glyphs while an ink storm and white motes swirl up.",
   time: [["0.00", "ink wisps + 10 pages spiral in (0.9 s)"], ["0.90", "book snaps together (x1.15 pop)"], ["1.02", "8 rune lines etch, 0.07 s apart"], ["2.18", "cover flips open (0.3 s), Small flash"], ["2.48", "8 glyphs + 2 orbit trails (2 s)"], ["4.48", "faint idle glow (3 s), fade 0.6 s"]],
   cast() {
     const book = add(char.pos, [1.3, 4.2, -0.4]);
     emit(45, { pos: () => add(book, mul(randUnit(), 4.5)), vel: p => mul(norm(sub(book, p)), rnd(5, 6)), life: [0.8, 0.9], size: [1.2, 0.2], kind: "ink", color: C.black, fadeIn: 0.2 });
-    const pages = []; for (let i = 0; i < 10; i++) pages.push({ a: i / 10 * Math.PI * 2, h: rnd(-2.5, 2.5), tum: rnd(-3, 3) });
+    const pages = []; for (let i = 0; i < 16; i++) pages.push({ a: i / 16 * Math.PI * 2, h: rnd(-2.5, 2.5), tum: rnd(-3, 3) });
     let cover = 0, formed = false, glowOn = 0, bob = 0;
     const B = custom({ dur: 8.2, layer: 2, update(dt, age) { if (age > 4.5) bob = Math.sin(age * 2.4) * 0.12; }, draw(k, age) {
       const c = add(book, [0, bob, 0]);
@@ -430,8 +505,18 @@ const SPELLS = [
     runes.forEach((ln, i) => at(1.02 + i * 0.07, () => bolt(() => [add(book, [ln[0][0] * 0.7, 0.24, ln[0][1] * 0.9]), add(book, [ln[1][0] * 0.7, 0.24, ln[1][1] * 0.9])], { seg: 4, amp: 0.05, width: 0.07, end: 0.6, dur: 1.16 - i * 0.07, fade: 0.2, flicker: 0.05 })));
     at(2.18, () => custom({ dur: 0.3, update(dt, age) { cover = 1 - Math.pow(1 - age / 0.3, 2); }, draw() {} }));
     at(2.48, () => { cover = 1; glowOn = 1; flash(book, "Small"); sparksSpec(book, 30); coreFlare(book, 1);
+      bossHit(book, char.pos, { impact: "Medium", punch: "Small", focus: { count: 26, inner: 0.1, lmin: 0.2, lmax: 0.5, thick: 3, dur: 0.3, t: 0.2 },
+        spheres: [{ r0: 0.5, r1: 4.5, dur: 0.4, t0: 0.15 }, { r0: 1, r1: 8, dur: 0.6, ff: true, delay: 0.04 }] });
+      ring(add(char.pos, [0, 0.06, 0]), { r0: 1, r1: 12, dur: 0.4, width: 0.6, seg: 28 }); shake(...SHAKE.Light);
+      const glyphPos = i => { const age = now - t0g; const a = age * 0.6 + i / 12 * Math.PI * 2; return add(char.pos, [Math.cos(a) * 4, 2.8 + Math.sin(age * 2 + i) * 0.15, Math.sin(a) * 4]); };
+      const t0g = now;
+      custom({ dur: 2, update(dt) { this.w = (this.w || 0) + dt; if (this.w >= 0.1) { this.w = 0; const i = Math.floor(Math.random() * 12);
+          bolt(() => [glyphPos(i), glyphPos((i + 1) % 12)], { seg: 5, amp: 0.35, width: 0.09, end: 0.5, dur: 0.14, fade: 0.06, flicker: 0.04 }); }
+        this.e = (this.e || 0) + dt; while (this.e >= 0.05) { this.e -= 0.05;
+          emit(5, { pos: () => { const a = rnd(0, 6.28); return add(char.pos, [Math.cos(a) * 4.5, 0.3, Math.sin(a) * 4.5]); }, vel: p => { const r = sub(p, char.pos); return add([0, rnd(3, 6), 0], mul(norm([-r[2], 0, r[0]]), 4)); }, acc: [0, 5, 0], life: [0.8, 1.3], size: [0.6, 2.2], kind: "ink", color: C.black, alpha: 0.85 });
+          emit(4, { pos: () => { const a = rnd(0, 6.28); return add(char.pos, [Math.cos(a) * 4.5, 0.3, Math.sin(a) * 4.5]); }, vel: () => [0, rnd(4, 9), 0], drag: 1, life: [0.8, 1.4], size: [0.35, 0] }); } }, draw() {} });
       custom({ dur: 2.35, layer: 3, draw(k, age) { const fade = clamp(age / 0.35, 0, 1) * (age > 2 ? 1 - (age - 2) / 0.35 : 1);
-        for (let i = 0; i < 8; i++) { const a = age * 0.6 + i / 8 * Math.PI * 2; const p = add(char.pos, [Math.cos(a) * 4, 2.8 + Math.sin(age * 2 + i) * 0.15, Math.sin(a) * 4]); const q = proj(p); if (!q) continue;
+        for (let i = 0; i < 12; i++) { const a = age * 0.6 + i / 12 * Math.PI * 2; const p = add(char.pos, [Math.cos(a) * 4, 2.8 + Math.sin(age * 2 + i) * 0.15, Math.sin(a) * 4]); const q = proj(p); if (!q) continue;
           const r = 0.3 * q.s; ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(Math.PI / 4); ctx.globalCompositeOperation = "lighter";
           ctx.fillStyle = `rgba(255,255,255,${0.85 * fade})`; ctx.fillRect(-r / 2, -r / 2, r, r); ctx.fillStyle = `rgba(236,242,255,${0.2 * fade})`; ctx.fillRect(-r, -r, 2 * r, 2 * r); ctx.restore(); } } });
       const ctr = () => add(char.pos, [0, 3, 0]);
@@ -441,26 +526,32 @@ const SPELLS = [
     at(4.48, () => { glowOn = 0.6; });
   }},
 { id: "VoidBurst", key: "2", name: "Void Burst", cam: CAM_DEFAULT,
-  desc: "Black smoke and seven thick ink tendrils collapse into a single point for 0.4 s, then detonate in a blinding white starburst with a long horizontal flare streak. White electricity crackles around the core while curved black shockwave arcs spray outward. The ground cracks in a circle and dark shards float up before dropping.",
+  desc: "Black smoke and seven thick ink tendrils collapse into a single point for 0.4 s, then detonate in a blinding white starburst with a long horizontal flare streak. White electricity crackles around the core while curved black shockwave arcs spray outward. The ground cracks in a circle and dark shards float up before dropping. Boss tier: impact frames, 42 focus lines, a heavy FOV punch, a white core inside black and white ForceField shells, 18 rocks erupting from the ground, a black aftershock ring 0.35 s later and smoke that lingers for 2 s.",
   time: [["0.00", "60 smoke puffs + 7 ink tendrils implode (r 9)"], ["0.40", "Large flash, 80-spark starburst, 2 core flares"], ["0.40", "6 crackle arcs (0.55 s), 6 black arcs"], ["0.40", "white ground ring to r 22 (0.5 s)"], ["0.40", "9-crack decal, 16 shards, Medium shake"], ["4.05", "decal fully faded"]],
   cast() {
     const g = TARGET, core = add(g, [0, 3, 0]);
     emit(60, { pos: () => add(core, mul(randUnit(), 9)), vel: p => mul(norm(sub(core, p)), 22), life: [0.4, 0.4], size: [4, 0.5], kind: "ink", color: C.black, fadeIn: 0.1 });
-    for (let i = 0; i < 7; i++) { const d = randUnit(); bolt(age => { const t = clamp(age / 0.4, 0, 1); return [add(core, mul(d, 9 * (1 - t * t))), core]; }, { seg: 8, amp: 1.4, width: 0.9, end: 0.15, dur: 0.4, fade: 0.05, flicker: 0.06, ink: true }); }
+    for (let i = 0; i < 12; i++) { const d = randUnit(); bolt(age => { const t = clamp(age / 0.4, 0, 1); return [add(core, mul(d, 9 * (1 - t * t))), core]; }, { seg: 8, amp: 1.4, width: 0.9, end: 0.15, dur: 0.4, fade: 0.05, flicker: 0.06, ink: true }); }
     at(0.4, () => {
       flash(core, "Large"); coreFlare(core, 2);
       emit(80, { pos: core, vel: () => mul(randUnit(), rnd(60, 110)), life: [0.3, 0.55], size: [1.2, 0], drag: 5, streak: 3 });
       inkSmoke(core, 30);
-      crackle(core, 3.5, 6, { seg: 6, amp: 0.7, width: 0.18, end: 0.3, dur: 0.55, fade: 0.15, flicker: 0.04 });
-      for (let i = 0; i < 6; i++) { const t = 55 * Math.PI / 180; ring(core, { r0: 2, r1: 18, dur: 0.45, width: 1.6, ink: true, span: 110 * Math.PI / 180, seg: 10, tilt: rotXZ(rnd(-t, t), rnd(0, Math.PI * 2), rnd(-t, t)) }); }
+      crackle(core, 3.5, 10, { seg: 6, amp: 0.7, width: 0.18, end: 0.3, dur: 0.55, fade: 0.15, flicker: 0.04 });
+      for (let i = 0; i < 10; i++) { const t = 55 * Math.PI / 180; ring(core, { r0: 2, r1: 18, dur: 0.45, width: 1.6, ink: true, span: 110 * Math.PI / 180, seg: 10, tilt: rotXZ(rnd(-t, t), rnd(0, Math.PI * 2), rnd(-t, t)) }); }
       ring(add(g, [0, 0.06, 0]), { r0: 1, r1: 22, dur: 0.5, width: 1.2, seg: 32 });
       cracks(g, { radius: 9, count: 9, segs: 5, jitter: 0.45, thick: 0.22, color: C.black, spread: 0.25, hold: 1.2, fade: 2 });
-      shards(g, { count: 16, size: [0.25, 0.7], radius: 8, rise: [2, 6], riseT: 0.45, hangT: 0.4, fallT: 0.55, fallDist: 6 });
+      shards(g, { count: 30, size: [0.25, 0.7], radius: 8, rise: [2, 6], riseT: 0.45, hangT: 0.4, fallT: 0.55, fallDist: 6 });
       shake(...SHAKE.Medium);
+      bossHit(core, g, { impact: "Heavy", punch: "Heavy", focus: { count: 42, inner: 0.08, lmin: 0.25, lmax: 0.7, thick: 4, dur: 0.4, t: 0.1 },
+        spheres: [{ r0: 1, r1: 9, dur: 0.4, t0: 0.05 }, { r0: 2, r1: 16, dur: 0.7, ff: true, delay: 0.05 }, { r0: 3, r1: 22, dur: 0.9, ff: true, color: C.white, delay: 0.14, t0: 0.2 }],
+        rocks: { count: 18, radius: 10, size: [1.6, 3.6], tilt: [20, 45], jitter: 1.5, rise: 0.25, hold: 1.6, sink: 0.6 } });
+      custom({ dur: 2, update(dt) { this.a = (this.a || 0) + dt; while (this.a >= 0.1) { this.a -= 0.1;
+        emit(3, { pos: () => add(g, [rnd(-9, 9), 0.5, rnd(-9, 9)]), vel: () => [rnd(-1, 1), rnd(1, 3), rnd(-1, 1)], acc: [0, 1.5, 0], life: [1.6, 2.4], size: [4, 10], kind: "ink", color: C.smoke, alpha: 0.5, fadeIn: 0.4 }); } }, draw() {} });
     });
+    at(0.75, () => { ring(add(g, [0, 0.08, 0]), { r0: 3, r1: 34, dur: 0.6, width: 2.6, seg: 40, ink: true }); inkSmoke(add(g, [0, 1, 0]), 40); shake(...SHAKE.Light); });
   }},
 { id: "AbyssalAura", key: "3", name: "Abyssal Aura", cam: { pos: v(7, 6, -12), look: v(0, 2.5, 0) }, loop: true,
-  desc: "A charge-up aura that loops until you press 3 again. Black spiky flames rise from the feet, two white ring trails orbit at different tilts, a white glow pulses at the base and small black shards drift upward in loops over a spreading dark crack decal. Stopping it fires a heavy white flash burst with a shockwave.",
+  desc: "A charge-up aura that loops until you press 3 again. Black spiky flames rise from the feet, two white ring trails orbit at different tilts, a white glow pulses at the base and small black shards drift upward in loops over a spreading dark crack decal. Stopping it fires a heavy white flash burst with a shockwave. Boss tier: rocks burst up when it starts, an ink column and rising sparks loop with it, electricity crackles over the body every 0.3 s and a white ring pulses out every 1.1 s. The stop burst adds impact frames, spheres and a second rock ring. Body effects scale with the caster, so a 3x boss gets a 3x aura.",
   time: [["loop", "55 black flames/s, 6 base glows/s"], ["loop", "2 orbit trails, 8 looping shards"], ["loop", "light pulses 2 ± 1.5 at 4 rad/s"], ["0.80", "crack decal fully spread (r 6)"], ["stop", "Large flash, 70 sparks, ring to r 16"], ["max", "auto-stops after 30 s or on death"]],
   cast() {
     if (auraActive) { auraStop && auraStop(); return; }
@@ -472,10 +563,17 @@ const SPELLS = [
     cracks(char.pos, { radius: 6, count: 7, segs: 4, jitter: 0.5, thick: 0.16, color: C.black, spread: 0.8, hold: 1e6, fade: 1.2 });
     const decal = fx[fx.length - 1];
     let accF = 0, accG = 0;
-    const sh = []; for (let i = 0; i < 8; i++) sh.push({ a: i / 8 * Math.PI * 2, r: rnd(1.5, 3.2), ph: rnd(0, 6) });
+    const sh = []; for (let i = 0; i < 14; i++) sh.push({ a: i / 14 * Math.PI * 2, r: rnd(1.5, 3.2), ph: rnd(0, 6) });
+    rocks(char.pos, { count: 12, radius: 5, size: [0.9, 2], tilt: [10, 30], jitter: 0.8, stagger: 0.02, rise: 0.3, hold: 1.4, sink: 0.5 });
+    sphereBurst(add(char.pos, [0, 2.8, 0]), { r0: 1, r1: 8, dur: 0.6, ff: true }); shake(...SHAKE.Light);
+    let arcT = 0, pulseT = 0, accI = 0, accS = 0;
     const loop = custom({ dur: 1e9, layer: 2, update(dt) {
         accF += dt * 55; while (accF >= 1) { accF--; emit(1, { pos: () => add(feet(), [rnd(-2, 2), 0.1, rnd(-2, 2)]), vel: () => [rnd(-0.5, 0.5), rnd(5, 9), rnd(-0.5, 0.5)], acc: [0, 6, 0], life: [0.5, 0.9], size: [1.6, 0], kind: "ink", color: C.black, streak: 1.2 }); }
         accG += dt * 6; while (accG >= 1) { accG--; emit(1, { pos: add(feet(), [0, 0.3, 0]), vel: [0, 0, 0], life: [0.8, 1], size: [4, 6], color: C.white, alpha: 0.35, fadeIn: 0.3 }); }
+        accI += dt * 30; while (accI >= 1) { accI--; emit(1, { pos: () => { const a = rnd(0, 6.28); return add(feet(), [Math.cos(a) * 2, 0.2, Math.sin(a) * 2]); }, vel: () => [0, rnd(10, 16), 0], life: [0.6, 1], size: [2, 0], kind: "ink", color: C.black, alpha: 0.8, streak: 0.6 }); }
+        accS += dt * 18; while (accS >= 1) { accS--; emit(1, { pos: () => add(feet(), [rnd(-2, 2), 0.2, rnd(-2, 2)]), vel: () => [0, rnd(6, 12), 0], life: [0.5, 0.9], size: [0.3, 0], streak: 2 }); }
+        arcT += dt; if (arcT >= 0.3) { arcT = 0; crackle(add(char.pos, [0, 2.8, 0]), 3.2, 2, { seg: 6, amp: 0.6, width: 0.12, end: 0.3, dur: 0.16, fade: 0.06, flicker: 0.04 }); }
+        pulseT += dt; if (pulseT >= 1.1) { pulseT = 0; ring(add(char.pos, [0, 0.06, 0]), { r0: 2, r1: 12, dur: 0.7, width: 0.4, seg: 28 }); }
       }, draw(k, age) {
         const q = proj(add(feet(), [0, 0.4, 0])); if (q) { const b = (2 + Math.sin(age * 4) * 1.5) / 3.5; const r = 6 * q.s;
           const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r); g.addColorStop(0, `rgba(236,242,255,${0.4 * b})`); g.addColorStop(1, "rgba(236,242,255,0)");
@@ -485,37 +583,52 @@ const SPELLS = [
           ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r * 0.5, 0); ctx.lineTo(0, r); ctx.lineTo(-r * 0.5, 0); ctx.closePath(); ctx.fill(); ctx.restore(); });
       }});
     auraStop = () => { auraActive = false; loop.dur = 0; o1.stopped = true; o2.stopped = true; decal.hold = 0; decal.dur = 0;
-      const p = add(char.pos, [0, 1, 0]); flash(p, "Large"); sparksSpec(p, 70); coreFlare(p, 2); ring(add(char.pos, [0, 0.06, 0]), { r0: 1, r1: 16, dur: 0.45, width: 1, seg: 28 }); shake(...SHAKE.Medium); };
+      const p = add(char.pos, [0, 1, 0]); flash(p, "Large"); sparksSpec(p, 70); coreFlare(p, 2); ring(add(char.pos, [0, 0.06, 0]), { r0: 1, r1: 16, dur: 0.45, width: 1, seg: 28 }); shake(...SHAKE.Medium);
+      bossHit(p, char.pos, { impact: "Heavy", punch: "Heavy", focus: { count: 40, inner: 0.08, lmin: 0.25, lmax: 0.7, thick: 4, dur: 0.4, t: 0.1 },
+        spheres: [{ r0: 1, r1: 11, dur: 0.45, t0: 0.05 }, { r0: 2, r1: 17, dur: 0.75, ff: true, delay: 0.05 }],
+        rocks: { count: 16, radius: 8, size: [1.4, 3], tilt: [20, 45], jitter: 1.2, rise: 0.25, hold: 1.4, sink: 0.6 } }); };
   }},
 { id: "ThunderJudgment", key: "4", name: "Thunder Judgment", cam: { pos: v(24, 14, -34), look: v(0, 21, 24) },
-  desc: "Ink-smoke clouds gather 45 studs above the target with faint white arcs flickering inside. A thick jagged white bolt, rebuilt every 0.05 s so it flickers, slams down with four branches and a soft glow behind it. On impact: white flash and flare streak, seven arcs crawling along the ground for 1 s, a scorched crack decal, and sparks that bounce.",
-  time: [["0.00", "cloud pulses every 0.15 s (18 puffs)"], ["0.00", "3 crackle arcs inside the clouds"], ["0.90", "main bolt + glow bolt (0.45 s, flicker 0.05)"], ["0.90", "Large flash, 50 sparks, 14 bouncing sparks"], ["0.90", "7 ground arcs crawl out 14 studs (0.6 s)"], ["0.90", "8-crack scorch decal, Heavy shake"]],
+  desc: "Ink-smoke clouds gather 45 studs above the target with faint white arcs flickering inside. A thick jagged white bolt, rebuilt every 0.05 s so it flickers, slams down with four branches and a soft glow behind it. On impact: white flash and flare streak, seven arcs crawling along the ground for 1 s, a scorched crack decal, and sparks that bounce. Boss tier: two smaller pre-strikes hammer the area first, then the main bolt (7 branches) lands with impact frames, focus lines, an FOV punch, a glowing shell, 16 rocks and static that keeps crackling for 2.4 s.",
+  time: [["0.00", "cloud pulses every 0.15 s (18 puffs)"], ["0.90", "2 pre-strikes scattered 10 studs, 0.2 s apart"], ["1.30", "main bolt (7 branches) + glow bolt"], ["1.30", "Heavy impact frames, focus lines, FOV punch"], ["1.30", "core sphere + glow shell, 16 rocks erupt"], ["1.30", "11 ground arcs, 24 bouncing sparks, static 2.4 s"]],
   cast() {
     const g = TARGET, sky = add(g, [0, 45, 0]);
-    custom({ dur: 1.35, update(dt, age) { this.acc = (this.acc || 0.15) + dt; while (this.acc >= 0.15) { this.acc -= 0.15;
+    custom({ dur: 1.75, update(dt, age) { this.acc = (this.acc || 0.15) + dt; while (this.acc >= 0.15) { this.acc -= 0.15;
       emit(18, { pos: () => add(sky, [rnd(-13, 13), rnd(-2, 2), rnd(-13, 13)]), vel: p => mul(norm(sub(sky, p)), rnd(3, 6)), life: [1.8, 2.4], size: [4, 11], kind: "ink", color: C.smoke, alpha: 0.9, fadeIn: 0.4, drag: 1 }); } }, draw() {} });
     crackle(sky, 7, 3, { seg: 6, amp: 1.2, width: 0.2, end: 0.3, dur: 0.9, fade: 0.1, flicker: 0.08 });
-    at(0.9, () => {
+    for (let k = 0; k < 2; k++) at(0.9 + k * 0.2, () => { const a = rnd(0, 6.28), r = rnd(0, 10); const spot = add(g, [Math.cos(a) * r, 0, Math.sin(a) * r]);
+      bolt(() => [add(sky, [spot[0] - g[0], 0, spot[2] - g[2]]), spot], { seg: 14, amp: 3, width: 1.1, end: 0.7, dur: 0.45, fade: 0.2, flicker: 0.05, branches: 3 }); flash(spot, "Small"); sparksSpec(spot, 20); });
+    at(1.3, () => {
       bolt(() => [sky, g], { seg: 14, amp: 3, width: 6, end: 0.8, dur: 0.45, fade: 0.2, flicker: 0.05, alpha: 0.35 });
-      bolt(() => [sky, g], { seg: 14, amp: 3, width: 2.2, end: 0.7, dur: 0.45, fade: 0.2, flicker: 0.05, branches: 4 });
+      bolt(() => [sky, g], { seg: 14, amp: 3, width: 2.2, end: 0.7, dur: 0.45, fade: 0.2, flicker: 0.05, branches: 7 });
       const imp = add(g, [0, 0.25, 0]);
       flash(imp, "Large"); sparksSpec(imp, 50); coreFlare(imp, 1); inkSmoke(imp, 20);
-      for (let i = 0; i < 7; i++) { const a = i / 7 * Math.PI * 2 + rnd(-0.35, 0.35); const e = add(g, [Math.cos(a) * 14 * rnd(0.6, 1), 0.25, Math.sin(a) * 14 * rnd(0.6, 1)]);
+      for (let i = 0; i < 11; i++) { const a = i / 11 * Math.PI * 2 + rnd(-0.35, 0.35); const e = add(g, [Math.cos(a) * 14 * rnd(0.6, 1), 0.25, Math.sin(a) * 14 * rnd(0.6, 1)]);
         bolt(age => [imp, lerpV(imp, e, clamp(age / 0.6, 0, 1))], { seg: 8, amp: 1, width: 0.25, end: 0.1, dur: 1, fade: 0.3, flicker: 0.05 }); }
       cracks(g, { radius: 8, count: 8, segs: 5, jitter: 0.6, thick: 0.2, color: C.black, spread: 0.15, hold: 1.2, fade: 2 });
-      for (let i = 0; i < 14; i++) { const a = rnd(0, 6.28), s = rnd(25, 45); const P = { p: add(g, [0, 0.5, 0]), v: [Math.cos(a) * s, rnd(15, 30), Math.sin(a) * s] };
+      for (let i = 0; i < 24; i++) { const a = rnd(0, 6.28), s = rnd(25, 45); const P = { p: add(g, [0, 0.5, 0]), v: [Math.cos(a) * s, rnd(15, 30), Math.sin(a) * s] };
         custom({ dur: 1.4, layer: 3, update(dt) { P.v[1] -= 196 * dt * 0.25; P.p = add(P.p, mul(P.v, dt)); if (P.p[1] < 0.1) { P.p[1] = 0.1; P.v[1] = -P.v[1] * 0.8; P.v[0] *= 0.8; P.v[2] *= 0.8; } },
           draw(k, age) { const q = proj(P.p); if (!q) return; const a2 = age > 1 ? 1 - (age - 1) / 0.4 : 1; ctx.fillStyle = `rgba(255,255,255,${a2})`; ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(1.2, 0.15 * q.s), 0, 6.28); ctx.fill(); } }); }
       shake(...SHAKE.Heavy);
+      bossHit(imp, g, { impact: "Heavy", punch: "Heavy", focus: { count: 44, inner: 0.06, lmin: 0.3, lmax: 0.75, thick: 4, dur: 0.4, t: 0.05 },
+        spheres: [{ r0: 1, r1: 8, dur: 0.35 }, { r0: 2, r1: 14, dur: 0.65, ff: true, color: C.glow, delay: 0.04, t0: 0.1 }],
+        rocks: { count: 16, radius: 7, size: [1.4, 3.2], tilt: [25, 50], jitter: 1.2, rise: 0.22, hold: 1.5, sink: 0.6 } });
+      custom({ dur: 2.4, update(dt) { this.r = (this.r || 0) + dt; if (this.r >= 0.22) { this.r = 0; for (let i = 0; i < 2; i++) { const a = rnd(0, 6.28); const f = add(g, [Math.cos(a) * rnd(0, 7), 0.25, Math.sin(a) * rnd(0, 7)]); const b = a + rnd(-1, 1), L = rnd(1, 3.5);
+        bolt(() => [f, add(f, [Math.cos(b) * L, 0, Math.sin(b) * L])], { seg: 5, amp: 0.5, width: 0.12, end: 0.2, dur: 0.12, fade: 0.06, flicker: 0.04 }); } } }, draw() {} });
     });
   }},
 { id: "InfernoSeal", key: "5", name: "Inferno Seal", cam: { pos: v(10, 10, 2), look: v(0, 6, 24) },
-  desc: "A circular rune seal draws itself on the ground in white lines (outer ring, inner ring, a five-point star and tick marks). Then a pillar of black and deep-crimson flames erupts upward with embers and flickering smoke under a flickering crimson light. It ends with a white flash core and a shockwave ring, leaving glowing embers drifting off cracked ground.",
+  desc: "A circular rune seal draws itself on the ground in white lines (outer ring, inner ring, a five-point star and tick marks). Then a pillar of black and deep-crimson flames erupts upward with embers and flickering smoke under a flickering crimson light. It ends with a white flash core and a shockwave ring, leaving glowing embers drifting off cracked ground. Boss tier: crimson flames lick up the seal's edge, the eruption tears up 14 basalt rocks, and crimson and black flame ribbons coil up the pillar. The finale adds impact frames, focus lines and a crimson ForceField shell.",
   time: [["0.00", "seal draws itself (0.8 s), rotates 0.4 rad/s"], ["0.80", "flame pillar pulses every 0.05 s (1.4 s)"], ["0.80", "black 7 + crimson 5 + embers 3 + smoke 2"], ["2.20", "Medium flash, 2 core flares, ring to r 20"], ["2.20", "crimson-glow crack decal (10 cracks)"], ["2.20", "ground embers for 2.5 s"]],
   cast() {
     const g = TARGET;
-    runeCircle(add(g, [0, 0.12, 0]), { radius: 9, inner: 0.78, points: 5, step: 2, ticks: 16, tick: 0.8, width: 0.22, draw: 0.8, hold: 1.6, fade: 0.6, rotSpeed: 0.4, ground: true });
+    custom({ dur: 2.4, update(dt) { this.f = (this.f || 0) + dt; while (this.f >= 0.04) { this.f -= 0.04;
+      emit(6, { pos: () => { const a = rnd(0, 6.28); return add(g, [Math.cos(a) * 9, 0.2, Math.sin(a) * 9]); }, vel: () => [0, rnd(6, 12), 0], life: [0.4, 0.7], size: [1.6, 0], color: C.crimsonB, alpha: 0.85, streak: 0.8 }); } }, draw() {} });
+    runeCircle(add(g, [0, 0.12, 0]), { radius: 9, inner: 0.78, points: 5, step: 2, ticks: 24, tick: 0.8, width: 0.22, draw: 0.8, hold: 1.6, fade: 0.6, rotSpeed: 0.4, ground: true });
     at(0.8, () => {
+      rocks(g, { count: 14, radius: 6, size: [1.4, 3], tilt: [20, 45], jitter: 1, stagger: 0.01, rise: 0.25, hold: 2, sink: 0.6, color: [70, 64, 62] }); punch("Medium"); shake(...SHAKE.Medium);
+      for (let i = 0; i < 3; i++) { orbitTrail(() => g, { radius: 5, height: 0, speed: 6, tilt: [0, 0, 0], phase: i / 3 * 6.283, rise: 26, width: 1.2, life: 0.5, dur: 1.4, color: C.crimsonB });
+        orbitTrail(() => g, { radius: 5, height: 0, speed: 6, tilt: [0, 0, 0], phase: i / 3 * 6.283 + 1.047, rise: 26, width: 1.8, life: 0.5, dur: 1.4, ink: true }); }
       custom({ dur: 1.4, layer: 3, update(dt) { this.acc = (this.acc || 0.05) + dt; while (this.acc >= 0.05) { this.acc -= 0.05;
           const base = () => add(g, [rnd(-4, 4), rnd(0, 2), rnd(-4, 4)]);
           emit(7, { pos: base, vel: () => [rnd(-1, 1), rnd(30, 45), rnd(-1, 1)], life: [0.6, 0.9], size: [3, 0], kind: "ink", color: C.black, streak: 0.8 });
@@ -528,11 +641,13 @@ const SPELLS = [
     });
     at(2.2, () => { const core = add(g, [0, 2, 0]); flash(core, "Medium"); coreFlare(core, 2); ring(add(g, [0, 0.06, 0]), { r0: 2, r1: 20, dur: 0.5, width: 1.2, seg: 32 });
       cracks(g, { radius: 9, count: 10, segs: 5, jitter: 0.5, thick: 0.2, color: C.crimsonB, glow: true, spread: 0.3, hold: 1.5, fade: 2 }); shake(...SHAKE.Medium);
+      bossHit(core, g, { impact: "Heavy", punch: "Heavy", focus: { count: 36, inner: 0.08, lmin: 0.25, lmax: 0.65, thick: 4, dur: 0.35, t: 0.1 },
+        spheres: [{ r0: 1, r1: 9, dur: 0.4 }, { r0: 2, r1: 15, dur: 0.7, ff: true, color: C.crimsonB, delay: 0.05 }] });
       custom({ dur: 2.5, update(dt) { this.acc = (this.acc || 0) + dt; while (this.acc >= 0.1) { this.acc -= 0.1;
         emit(4, { pos: () => add(g, [rnd(-9, 9), rnd(0, 2), rnd(-9, 9)]), vel: () => [rnd(-1, 1), rnd(0.5, 2), rnd(-1, 1)], acc: [0, 1, 0], life: [1.5, 2.5], size: [0.25, 0], color: C.crimsonB }); } }, draw() {} }); });
   }},
 { id: "FrostRequiem", key: "6", name: "Frost Requiem", cam: { pos: v(12, 8, -10), look: v(0, 2, 13) },
-  desc: "Sharp pale-cyan crystal spikes burst out of the ground one after another in a line from the caster to the target, each with a white rim glow. Frost mist rolls along the floor, white shard particles shatter outward at the target, and a frozen star-pattern crack spreads. After 1.5 s every spike shatters into tumbling glass fragments.",
+  desc: "Sharp pale-cyan crystal spikes burst out of the ground one after another in a line from the caster to the target, each with a white rim glow. Frost mist rolls along the floor, white shard particles shatter outward at the target, and a frozen star-pattern crack spreads. After 1.5 s every spike shatters into tumbling glass fragments. Boss tier: a crown of nine giant crystals erupts at the target with 18 ice rocks, a blizzard swirls for 1.6 s, and the hit adds impact frames, focus lines and a pale-cyan shell. The shatter sends out a cyan ring.",
   time: [["0.00", "spikes every 4 studs, 0.04 s apart (max 24)"], ["0.00", "4 mist + 6 snow per spike"], ["0.24", "final spike x1.6 at the target"], ["0.24", "Medium flash, 60 shatter shards, ring r 16"], ["0.24", "8-arm star crack, pale cyan glow"], ["1.74", "spikes shatter, 5 fragments each"]],
   cast() {
     const start = char.pos, end = TARGET, dist = len(sub(end, start)); const dir = norm(sub(end, start)); const side = [-dir[2], 0, dir[0]];
@@ -544,34 +659,46 @@ const SPELLS = [
       spikes.push(sp);
       emit(4, { pos: () => add(p, [rnd(-1, 1), 0.3, rnd(-1, 1)]), vel: () => [rnd(-5, 5), rnd(0, 0.3), rnd(-5, 5)], life: [1.2, 1.8], size: [2, 6], color: C.cyan, alpha: 0.35, drag: 1, fadeIn: 0.3 });
       emit(6, { pos: add(p, [0, 1, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white });
-      custom({ dur: 1.5 + (n - i) * 0.04, layer: 2, draw(k, age) {
+      spikeDraw(sp, 1.5 + (n - i) * 0.04);
+    });
+    function spikeDraw(sp, life) { const p = sp.p;
+      custom({ dur: life, layer: 2, draw(k, age) {
         if (sp.dead) return; const grow = Math.min(1, age / 0.15); const e = 1 + 2.7 * Math.pow(grow - 1, 3) + 1.7 * Math.pow(grow - 1, 2); // Back out
         const h = sp.h * e * 0.6; const tip = add(p, [sp.lean[0] * h, h, sp.lean[1] * h]);
         const bl = proj(add(p, mul(side, -sp.w / 2))), br = proj(add(p, mul(side, sp.w / 2))), bf = proj(add(p, mul(dir, -sp.w / 2))), tq = proj(tip); if (!bl || !br || !tq || !bf) return;
         ctx.beginPath(); ctx.moveTo(bl.x, bl.y); ctx.lineTo(tq.x, tq.y); ctx.lineTo(br.x, br.y); ctx.lineTo(bf.x, bf.y); ctx.closePath();
         const gr = ctx.createLinearGradient(bl.x, bl.y, br.x, tq.y); gr.addColorStop(0, "rgba(150,215,240,0.95)"); gr.addColorStop(1, "rgba(220,246,255,0.9)");
         ctx.fillStyle = gr; ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,0.95)"; ctx.lineWidth = Math.max(1, 0.08 * tq.s); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(bf.x, bf.y); ctx.lineTo(tq.x, tq.y); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1; ctx.stroke(); } });
-    });
+        ctx.beginPath(); ctx.moveTo(bf.x, bf.y); ctx.lineTo(tq.x, tq.y); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1; ctx.stroke(); } }); }
     const tImp = (n - 1) * 0.04;
     at(tImp, () => { const imp = add(end, [0, 4, 0]); flash(imp, "Medium");
       emit(60, { pos: imp, vel: () => mul(randUnit(), rnd(35, 60)), acc: [0, -20, 0], drag: 4, life: [0.4, 0.8], size: [0.7, 0], color: C.cyan, streak: 1 });
       ring(add(end, [0, 0.06, 0]), { r0: 1, r1: 16, dur: 0.45, width: 0.9, seg: 28 });
-      cracks(end, { radius: 10, count: 8, segs: 4, jitter: 0.08, thick: 0.18, color: C.cyan, glow: true, pattern: "star", spread: 0.35, hold: 1.5, fade: 2 }); shake(...SHAKE.Medium); });
-    at(tImp + 1.5, () => spikes.forEach(sp => { sp.dead = true; shards(sp.p, { count: 5, size: [0.2, 0.5], radius: 0.8, rise: [0.5, 3], spread: 3, riseT: 0.25, hangT: 0.1, fallT: 0.45, fallDist: 5, color: C.ice });
+      cracks(end, { radius: 10, count: 8, segs: 4, jitter: 0.08, thick: 0.18, color: C.cyan, glow: true, pattern: "star", spread: 0.35, hold: 1.5, fade: 2 }); shake(...SHAKE.Medium);
+      bossHit(imp, end, { impact: "Medium", punch: "Medium", focus: { count: 34, inner: 0.08, lmin: 0.25, lmax: 0.65, thick: 3, dur: 0.35, t: 0.15 },
+        spheres: [{ r0: 0.5, r1: 7, dur: 0.35, t0: 0.1 }, { r0: 1.5, r1: 14, dur: 0.7, ff: true, color: C.cyan, delay: 0.05 }],
+        rocks: { count: 18, radius: 8, size: [1.4, 3], tilt: [20, 45], jitter: 1.4, rise: 0.22, hold: 1.4, sink: 0.6, color: [150, 205, 230] } });
+      // crown of giant crystals
+      for (let c = 0; c < 9; c++) at(c * 0.02, () => { const a = c / 9 * 6.283 + rnd(-0.3, 0.3); const out = [Math.cos(a), 0, Math.sin(a)]; const p = add(end, mul(out, 2.5));
+        const sp = { p, h: rnd(9, 18) / 0.6, w: rnd(1.8, 3.2), lean: [out[0] * rnd(0.3, 1.1), out[2] * rnd(0.3, 1.1)], dead: false }; spikes.push(sp); spikeDraw(sp, 1.5 + 0.2); });
+      custom({ dur: 1.6, update(dt) { this.b = (this.b || 0) + dt; while (this.b >= 0.06) { this.b -= 0.06;
+        emit(10, { pos: () => add(end, [rnd(-10, 10), rnd(0.5, 4), rnd(-10, 10)]), vel: p => { const r = sub(p, end); return add(mul(norm([-r[2], 0, r[0]]), rnd(8, 16)), [0, rnd(-1, 2), 0]); }, drag: 1, acc: [0, -2, 0], life: [1, 1.6], size: [0.4, 0], color: C.white }); } }, draw() {} }); });
+    at(tImp + 1.5, () => ring(add(end, [0, 0.06, 0]), { r0: 2, r1: 22, dur: 0.5, width: 0.8, seg: 32 }));
+    at(tImp + 1.5, () => spikes.forEach(sp => { sp.dead = true; shards(sp.p, { count: 8, size: [0.2, 0.5], radius: 0.8, rise: [0.5, 3], spread: 3, riseT: 0.25, hangT: 0.1, fallT: 0.45, fallDist: 5, color: C.ice });
       emit(10, { pos: add(sp.p, [0, sp.h * 0.4, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white }); }));
   }},
 { id: "GaleReaper", key: "7", name: "Gale Reaper", cam: { pos: v(3, 7, -11), look: v(0, 2.5, 18) },
-  desc: "A fast crescent wind slash fired forward at 140 studs/s. A huge curved white blade with black smoky edges travels to the target, leaving speed lines, ink wisps and two wind spirals. On contact it splits into four smaller fading crescents, kicks up dust and debris, and carves a long slash-shaped crack decal.",
-  time: [["0.00", "crescent launches (half-width 7, bulge 5)"], ["0.00", "speed lines + ink wake every 0.02 s"], ["0.00", "2 wind spirals at 24 rad/s"], ["0.15", "arrives; splits into 4 crescents (70° fan)"], ["0.15", "Small flash, 25 dust, 10 shards"], ["0.15", "22-stud slash crack, Light shake"]],
+  desc: "A fast crescent wind slash fired forward at 140 studs/s. A huge curved white blade with black smoky edges travels to the target, leaving speed lines, ink wisps and two wind spirals. On contact it splits into four smaller fading crescents, kicks up dust and debris, and carves a long slash-shaped crack decal. Boss tier: three crescents fire 0.11 s apart at alternating angles on parallel paths; rocks erupt along both sides of the slash line and the final hit adds impact frames, focus lines, an FOV punch and a black ForceField shell.",
+  time: [["0.00", "3 crescents, 0.11 s apart, rolls 12/-24/38°"], ["0.00", "speed lines + ink wake every 0.02 s"], ["0.00", "2 wind spirals at 24 rad/s"], ["0.15", "arrives; splits into 4 crescents (70° fan)"], ["0.15", "Small flash, 25 dust, 10 shards"], ["0.15", "22-stud slash crack, Light shake"]],
   cast() {
     const start = add(char.pos, [0, 2.5, 2.5]), end = add(TARGET, [0, 2, 0]); const dir = norm(sub(end, start)); const D = len(sub(end, start));
     const travel = Math.max(D / 140, 0.12) * 1.6; // slowed 1.6x in the mockup so the blade is visible
-    const crescent = (from, d, dist, dur, scale, fade, onArrive) => {
-      const right = norm(cross([0, 1, 0], d)); const hist = [];
+    const crescent = (from, d, dist, dur, scale, fade, onArrive, roll = 12) => {
+      const r0 = norm(cross([0, 1, 0], d)), cr = Math.cos(roll * Math.PI / 180), sr = Math.sin(roll * Math.PI / 180);
+      const right = add(mul(r0, cr), mul([0, 1, 0], sr)), upv = add(mul([0, 1, 0], cr), mul(r0, -sr)); const hist = [];
       custom({ dur, layer: 3, update(dt, age) { const p = add(from, mul(d, dist * (age / dur))); hist.push(p); if (hist.length > 6) hist.shift(); if (Math.random() < 0.9) emit(3, { pos: () => add(p, add(mul(right, rnd(-6, 6) * scale), [0, rnd(-1, 1), 0])), vel: mul(d, -rnd(40, 80)), life: [0.15, 0.3], size: [0.25, 0], streak: 3 }); },
         draw(k, age) { const a = fade ? 1 - k : 1; const p = add(from, mul(d, dist * (age / dur)));
-          const pts = []; for (let i = 0; i <= 24; i++) { const t = i / 24 * 2 - 1; pts.push(add(add(p, mul(right, t * 7 * scale)), add(mul(d, (1 - t * t) * 5 * scale), [0, t * 1.2 * scale, 0]))); }
+          const pts = []; for (let i = 0; i <= 24; i++) { const t = i / 24 * 2 - 1; pts.push(add(add(p, mul(right, t * 7 * scale)), add(mul(d, (1 - t * t) * 5 * scale), mul(upv, t * 1.2 * scale)))); }
           const stroke = (offset, w, style) => { ctx.lineCap = "round"; for (let i = 0; i < pts.length - 1; i++) { const t = i / 24 * 2 - 1; const q0 = proj(add(pts[i], mul(d, -offset))), q1 = proj(add(pts[i + 1], mul(d, -offset))); if (!q0 || !q1) continue; ctx.lineWidth = Math.max(0.8, w * (1 - t * t) * q0.s * scale); ctx.strokeStyle = style; ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke(); } };
           stroke(0.8, 4, `rgba(${C.black},${0.7 * a})`); stroke(0, 3.2, `rgba(255,255,255,${0.35 * a})`); stroke(0, 1.6, `rgba(255,255,255,${a})`);
           for (let s = 0; s < 2; s++) { ctx.beginPath(); for (let j = 0; j < 14; j++) { const tt = age - j * 0.012; if (tt < 0) break; const c = add(from, mul(d, dist * (tt / dur))); const ang = tt * 24 + s * Math.PI; const up = [0, 1, 0];
@@ -580,23 +707,33 @@ const SPELLS = [
         }});
       if (onArrive) at(dur, onArrive);
     };
-    crescent(start, dir, D, travel, 1, false, () => {
-      for (let i = 0; i < 4; i++) { const yaw = (-35 + 70 * i / 3) * Math.PI / 180; const d2 = norm([dir[0] * Math.cos(yaw) - dir[2] * Math.sin(yaw), dir[1], dir[0] * Math.sin(yaw) + dir[2] * Math.cos(yaw)]); crescent(end, d2, 14, 0.3, 0.4, true); }
-      flash(end, "Small");
-      emit(25, { pos: TARGET, vel: () => [rnd(-15, 15), rnd(2, 8), rnd(-15, 15)], drag: 3, life: [0.6, 1.1], size: [2, 6], kind: "ink", color: C.grey, alpha: 0.6 });
-      shards(TARGET, { count: 10, size: [0.2, 0.55], radius: 4, rise: [1.5, 4], spread: 2, riseT: 0.35, hangT: 0.25, fallT: 0.5, fallDist: 5 });
-      const flat = norm([dir[0], 0, dir[2]]);
-      cracks(sub(TARGET, mul(flat, 11)), { pattern: "slash", forward: flat, length: 22, radius: 2.5, count: 6, segs: 8, jitter: 0.3, thick: 0.24, color: C.black, spread: 0.18, hold: 1.2, fade: 2 });
-      shake(...SHAKE.Light);
+    const side = norm([-dir[2], 0, dir[0]]); const rolls = [12, -24, 38];
+    for (let k = 0; k < 3; k++) at(k * 0.11 * 1.6, () => {
+      const off = mul(side, (k - 1) * 2.5); const from = add(start, off), to = add(end, off); const final = k === 2;
+      crescent(from, dir, D, travel, 1, false, () => {
+        for (let i = 0; i < 6; i++) { const yaw = (-35 + 70 * i / 5) * Math.PI / 180; const d2 = norm([dir[0] * Math.cos(yaw) - dir[2] * Math.sin(yaw), dir[1], dir[0] * Math.sin(yaw) + dir[2] * Math.cos(yaw)]); crescent(to, d2, 14, 0.3, 0.4, true, null, rolls[k]); }
+        flash(to, "Small");
+        const tg = add(TARGET, off);
+        emit(25, { pos: tg, vel: () => [rnd(-15, 15), rnd(2, 8), rnd(-15, 15)], drag: 3, life: [0.6, 1.1], size: [2, 6], kind: "ink", color: C.grey, alpha: 0.6 });
+        shards(tg, { count: 18, size: [0.2, 0.55], radius: 4, rise: [1.5, 4], spread: 2, riseT: 0.35, hangT: 0.25, fallT: 0.5, fallDist: 5 });
+        const flat = norm([dir[0], 0, dir[2]]);
+        cracks(sub(tg, mul(flat, 11)), { pattern: "slash", forward: flat, length: 22, radius: 2.5, count: 6, segs: 8, jitter: 0.3, thick: 0.24, color: C.black, spread: 0.18, hold: 1.2, fade: 2 });
+        shake(...SHAKE.Light);
+        if (final) { bossHit(to, TARGET, { impact: "Medium", punch: "Medium", focus: { count: 36, inner: 0.08, lmin: 0.3, lmax: 0.7, thick: 3, dur: 0.3, t: 0.1 },
+          spheres: [{ r0: 0.5, r1: 6, dur: 0.3, t0: 0.1 }, { r0: 1, r1: 11, dur: 0.55, ff: true, delay: 0.04 }] });
+          rocksLine(char.pos, TARGET, { spacing: 3, radius: 2.6, size: [1, 2.2], tilt: [25, 55], rise: 0.2, hold: 1.4, sink: 0.6 }); }
+      }, rolls[k]);
     });
   }},
 { id: "CelestialVerdict", key: "8", name: "Celestial Verdict", cam: { pos: v(36, 30, -86), look: v(0, 34, 24) },
-  desc: "The ultimate. The sky dims and desaturates, and a giant white rune circle (seven-point star) draws itself 70 studs above the target and rotates. A massive pillar of white light crashes down, outlined by six crackling bolts and wrapped in black ink smoke spiralling upward. Impact: a huge flare streak, a double shockwave ring, heavy camera shake, a crater-sized crack decal and dozens of shards hanging mid-air before they fall. Lighting is restored afterwards.",
+  desc: "The ultimate. The sky dims and desaturates, and a giant white rune circle (seven-point star) draws itself 70 studs above the target and rotates. A massive pillar of white light crashes down, outlined by six crackling bolts and wrapped in black ink smoke spiralling upward. Impact: a huge flare streak, a double shockwave ring, heavy camera shake, a crater-sized crack decal and dozens of shards hanging mid-air before they fall. Lighting is restored afterwards. Boss tier: lightning crawls over the circle while it charges, focus lines snap toward it, and the impact adds a 5-step impact-frame sequence, a 24-degree FOV punch, three nested spheres, two rock rings (28 + 36) and eight light spears slamming down around the pillar.",
   time: [["0.00", "sky dims (0.6 s), rune circle r 22 at 70 studs"], ["1.40", "pillar crashes down in 0.12 s"], ["1.40", "6 edge bolts, ink spiral + 4 ink trails"], ["1.52", "Ultimate flash, 120 sparks, 3 core flares"], ["1.52", "white ring r 45 + black ring r 30 (+0.18 s)"], ["1.52", "14-crack crater, 40 shards hang 1.2 s"]],
   cast() {
     const g = TARGET, sky = add(g, [0, 70, 0]);
     dimTarget = 1;
     runeCircle(sky, { radius: 22, inner: 0.82, points: 7, step: 3, ticks: 28, tick: 1.6, width: 0.5, draw: 0.9, hold: 2.6, fade: 0.8, rotSpeed: 0.5 });
+    for (let i = 0; i < 5; i++) bolt(() => { const a = rnd(0, 6.28), b = a + rnd(-1, 1); return [add(sky, [Math.cos(a) * 20, 0, Math.sin(a) * 20]), add(sky, [Math.cos(b) * 20, 0, Math.sin(b) * 20])]; }, { seg: 8, amp: 2, width: 0.35, end: 0.3, dur: 1.4, fade: 0.2, flicker: 0.05 });
+    at(0.9, () => focusLines(sky, { count: 30, inner: 0.12, lmin: 0.2, lmax: 0.5, thick: 2, dur: 0.5, t: 0.35 }));
     at(1.4, () => {
       custom({ dur: 0.12 + 1.4 + 0.5, layer: 3, draw(k, age) { const crash = clamp(age / 0.12, 0, 1); const bottom = lerpV(sky, g, crash * crash);
         const fade = age > 1.52 ? clamp((age - 1.52) / 0.5, 0, 1) : 0; const qa = proj(sky), qb = proj(bottom); if (!qa || !qb) return;
@@ -605,22 +742,32 @@ const SPELLS = [
           const grd = ctx.createLinearGradient(qb.x - wb / 2, 0, qb.x + wb / 2, 0); grd.addColorStop(0, "rgba(255,255,255,0)"); grd.addColorStop(0.5, `rgba(255,255,255,${a * (1 - fade)})`); grd.addColorStop(1, "rgba(255,255,255,0)");
           ctx.fillStyle = grd; ctx.beginPath(); ctx.moveTo(qa.x - wa / 2, qa.y); ctx.lineTo(qa.x + wa / 2, qa.y); ctx.lineTo(qb.x + wb / 2, qb.y); ctx.lineTo(qb.x - wb / 2, qb.y); ctx.closePath(); ctx.fill(); });
         ctx.globalCompositeOperation = "source-over"; } });
-      for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2, off = [Math.cos(a) * 6, 0, Math.sin(a) * 6]; bolt(() => [add(sky, off), add(g, off)], { seg: 16, amp: 1.6, width: 0.35, end: 0.5, dur: 1.4, fade: 0.4, flicker: 0.05 }); }
+      for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2, off = [Math.cos(a) * 6, 0, Math.sin(a) * 6]; bolt(() => [add(sky, off), add(g, off)], { seg: 16, amp: 1.6, width: 0.35, end: 0.5, dur: 1.4, fade: 0.4, flicker: 0.05 }); }
       custom({ dur: 1.4, update(dt) { this.acc = (this.acc || 0) + dt; while (this.acc >= 0.05) { this.acc -= 0.05;
         emit(6, { pos: () => { const a = rnd(0, 6.28); return add(g, [Math.cos(a) * 11, 0, Math.sin(a) * 11]); }, vel: p => { const r = sub(p, g); return add([0, rnd(18, 30), 0], mul(norm([-r[2], 0, r[0]]), 6)); }, life: [1.2, 1.8], size: [3, 7], kind: "ink", color: C.black, alpha: 0.85, fadeIn: 0.15 }); } }, draw() {} });
-      for (let i = 0; i < 4; i++) orbitTrail(() => g, { radius: 10, height: 0, speed: 5, tilt: [0, 0, 0], phase: i / 4 * Math.PI * 2, rise: 40, width: 2.2, life: 0.9, dur: 1.4, ink: true });
+      for (let i = 0; i < 6; i++) orbitTrail(() => g, { radius: 10, height: 0, speed: 5, tilt: [0, 0, 0], phase: i / 6 * Math.PI * 2, rise: 40, width: 2.2, life: 0.9, dur: 1.4, ink: true });
     });
     at(1.52, () => { flash(add(g, [0, 2, 0]), "Ultimate"); coreFlare(add(g, [0, 2, 0]), 3, 30); sparksSpec(add(g, [0, 1, 0]), 120); inkSmoke(add(g, [0, 1, 0]), 50);
       ring(add(g, [0, 0.06, 0]), { r0: 4, r1: 45, dur: 0.7, width: 3, seg: 48 }); ring(add(g, [0, 0.08, 0]), { r0: 2, r1: 30, dur: 0.8, width: 2, seg: 40, ink: true, delay: 0.18 });
       cracks(g, { radius: 22, count: 14, segs: 7, jitter: 0.5, thick: 0.4, color: C.black, spread: 0.3, hold: 2, fade: 2.2 });
-      shards(g, { count: 40, size: [0.3, 1.2], radius: 20, rise: [4, 14], spread: 2, drift: 0.6, riseT: 0.6, hangT: 1.2, fallT: 0.7, fallDist: 14 });
-      shake(...SHAKE.Ultimate); });
+      shards(g, { count: 70, size: [0.3, 1.2], radius: 20, rise: [4, 14], spread: 2, drift: 0.6, riseT: 0.6, hangT: 1.2, fallT: 0.7, fallDist: 14 });
+      shake(...SHAKE.Ultimate);
+      bossHit(add(g, [0, 2, 0]), g, { impact: "Ultimate", punch: "Ultimate", focus: { count: 64, inner: 0.05, lmin: 0.3, lmax: 0.85, thick: 5, dur: 0.55 },
+        spheres: [{ r0: 2, r1: 20, dur: 0.5 }, { r0: 4, r1: 35, dur: 1, ff: true, delay: 0.08 }, { r0: 5, r1: 47, dur: 1.3, ff: true, color: C.white, delay: 0.2, t0: 0.2 }],
+        rocks: { count: 28, radius: 16, size: [3, 6.5], tilt: [25, 55], jitter: 2.5, rise: 0.3, hold: 2.6, sink: 0.8 } });
+      at(0.12, () => rocks(g, { count: 36, radius: 28, size: [2, 4.5], tilt: [15, 40], jitter: 3, rise: 0.3, hold: 2.4, sink: 0.8 }));
+      for (let i = 0; i < 8; i++) at(0.2 + i * 0.06, () => { const a = i / 8 * 6.283 + rnd(-0.2, 0.2); const spot = add(g, [Math.cos(a) * 18, 0, Math.sin(a) * 18]); const top = add(spot, [0, 50, 0]);
+        custom({ dur: 0.08 + 0.45 + 0.3, layer: 3, draw(k, age) { const crash = clamp(age / 0.08, 0, 1); const bottom = lerpV(top, spot, crash * crash); const fade = age > 0.53 ? clamp((age - 0.53) / 0.3, 0, 1) : 0;
+          const qa = proj(top), qb = proj(bottom); if (!qa || !qb) return; ctx.globalCompositeOperation = "lighter";
+          [[6, 0.3], [2.4, 1]].forEach(([w, al]) => { const wa = w * qa.s * (1 - fade), wb = w * qb.s * (1 - fade); ctx.fillStyle = `rgba(255,255,255,${al * (1 - fade)})`; ctx.beginPath(); ctx.moveTo(qa.x - wa / 2, qa.y); ctx.lineTo(qa.x + wa / 2, qa.y); ctx.lineTo(qb.x + wb / 2, qb.y); ctx.lineTo(qb.x - wb / 2, qb.y); ctx.closePath(); ctx.fill(); });
+          ctx.globalCompositeOperation = "source-over"; } });
+        at(0.08, () => { flash(spot, "Small"); ring(add(spot, [0, 0.06, 0]), { r0: 1, r1: 9, dur: 0.35, width: 0.8, seg: 20 }); }); }); });
     at(1.4 + 0.12 + 1.4 + 0.5, () => { dimTarget = 0; });
   }},
 ];
 
 // ---------- main loop ----------
-let last = performance.now(), current = null, castAt = 0;
+let last = performance.now(), current = null, castAt = 0, freezeNext = false;
 function frame(t) {
   const dt = Math.min(0.05, (t - last) / 1000); last = t; now += dt;
   updateCamera(dt);
@@ -642,21 +789,29 @@ function frame(t) {
     p.vel = add(mul(p.vel, Math.max(0, 1 - p.drag * dt)), mul(p.acc, dt)); p.pos = add(p.pos, mul(p.vel, dt)); }
 
   const drawFx = layer => { for (const e of fx) { const age = now - e.t0; if (age < 0 || e.layer !== layer || !e.draw) continue; ctx.save(); e.draw(clamp(age / e.dur, 0, 1), age); ctx.restore(); } };
-  drawFx(0); drawFx(0.5);
+  drawFx(0); drawFx(0.5); drawFx(0.8);
   drawCharacter();
   drawFx(1);
   // ink particles (normal blend), far to near
   const sorted = parts.slice().sort((a, b) => len(sub(b.pos, cam.pos)) - len(sub(a.pos, cam.pos)));
   for (const p of sorted) if (p.kind === "ink") drawParticle(p);
-  drawFx(2);
+  drawFx(2); drawFx(2.5);
   ctx.globalCompositeOperation = "lighter";
   for (const p of parts) if (p.kind !== "ink") drawParticle(p);
   ctx.globalCompositeOperation = "source-over";
   drawFx(3);
-  drawFx(4);
+  drawFx(4); drawFx(4.5);
+  // anime impact frames: stark monochrome, alternating inverted
+  if (impactSteps.length) { impactT += dt; let acc = 0, step = null; for (const st of impactSteps) { acc += st[0]; if (impactT < acc) { step = st; break; } }
+    if (!step) impactSteps = []; else {
+      if (step[1] && window.__preview && window.__preview.freezeOnInvert) freezeNext = true;
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.filter = `grayscale(1) contrast(4) brightness(${step[1] ? 0.9 : 1.25})${step[1] ? " invert(1)" : ""}`;
+      ctx.drawImage(canvas, 0, 0); ctx.restore(); if (step[2]) { ctx.fillStyle = `rgba(255,255,255,${step[2] * 0.6})`; ctx.fillRect(0, 0, W, H); } } }
   if (screenFlash > 0.01) { ctx.fillStyle = `rgba(255,255,255,${screenFlash})`; ctx.fillRect(0, 0, W, H); screenFlash *= Math.exp(-dt * 9); }
 
   updateHud();
+  if (freezeNext) { freezeNext = false; window.__preview.freezeOnInvert = false; window.__preview.frozen = true; return; }
   if (autoBox.checked && current && now - castAt > (current.loop ? 5 : 6.5)) {
     if (current.loop && auraActive) { auraStop(); castAt = now - 3.5; }
     else next();
@@ -701,7 +856,7 @@ function next() { const i = current ? SPELLS.indexOf(current) : -1; cast(SPELLS[
 window.addEventListener("keydown", e => { const s = SPELLS.find(x => x.key === e.key); if (s) { autoBox.checked = false; cast(s); } });
 
 // hook for screenshot capture
-window.__preview = { cast: id => { autoBox.checked = false; const s = SPELLS.find(x => x.id === id); setCamera(s.cam || CAM_DEFAULT, true); cast(s); }, ids: SPELLS.map(s => s.id) };
+window.__preview = { freezeOnInvert: false, frozen: false, resume() { this.frozen = false; requestAnimationFrame(t => { last = t; frame(t); }); }, cast: id => { autoBox.checked = false; const s = SPELLS.find(x => x.id === id); setCamera(s.cam || CAM_DEFAULT, true); cast(s); }, ids: SPELLS.map(s => s.id) };
 
 setCamera(SPELLS[0].cam, true); cast(SPELLS[0]);
 requestAnimationFrame(t => { last = t; frame(t); });

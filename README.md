@@ -15,6 +15,52 @@ The art direction is dark, anime-style magic: mostly black and white with very h
 | 7 | **GaleReaper** | A crescent wind slash travels to the target and splits into smaller crescents |
 | 8 | **CelestialVerdict** | Ultimate: the sky dims, a sky rune circle appears and a pillar of light crashes down |
 
+### World boss tier
+
+Every spell now has boss-tier layers on top of its base effect:
+
+* **Impact frames.** For a few frames on each big hit, the whole screen snaps to stark, high-contrast black and white, anime style.
+* **Focus lines.** Thin white streaks radiate from the hit point on screen.
+* **Erupting rocks.** Chunks of ground punch up in a ring, or along both sides of a slash. They copy the material and colour of the floor they burst out of.
+* **Energy spheres.** A white neon core, plus black and white ForceField shells that expand outward.
+* **FOV punch.** The camera's field of view kicks out and eases back.
+* **Spell-specific extras:**
+  * GrimoireAwakening: arcs jump between the glyphs.
+  * AbyssalAura: electricity crackles over the body and white rings pulse out.
+  * ThunderJudgment: two pre-strikes land before the main bolt.
+  * InfernoSeal: flame ribbons coil up the pillar.
+  * FrostRequiem: a crown of giant crystals erupts at the target.
+  * GaleReaper: three slashes fire in quick succession.
+  * CelestialVerdict: eight light spears slam down around the pillar.
+* **More particles.** `Config.Intensity.Particles` multiplies every particle count; it's 1.6 by default.
+
+**Performance and accessibility settings** in `Config.lua`:
+
+| Setting | What it does |
+| --- | --- |
+| `Config.Intensity.Particles` | Particle multiplier. Lower it to ~0.6 if mobile players struggle. |
+| `Config.Intensity.MaxPerBurst` | Hard cap on any single burst. |
+| `Config.ImpactFrame.Enabled` | Set to `false` to turn off the black/white flicker for players sensitive to flashing. Consider exposing it as a player setting. |
+
+### Making a world boss cast
+
+Spells can be cast by any NPC model, not just players. From your boss AI (a server Script):
+
+```lua
+local SpellService = require(game:GetService("ServerScriptService").SpellService)
+
+-- bossModel: a character Model in Workspace with a Humanoid + HumanoidRootPart
+SpellService.CastFromModel(bossModel, "CelestialVerdict", targetPlayerRoot.Position)
+SpellService.CastFromModel(bossModel, "AbyssalAura", bossModel:GetPivot().Position) -- toggles on
+SpellService.CastFromModel(bossModel, "AbyssalAura", bossModel:GetPivot().Position) -- toggles off
+```
+
+* Boss casts skip cooldowns and range checks, because your boss script decides when to cast.
+* Loops on the boss stop automatically when it dies or is removed.
+* Effects attached to the body, such as AbyssalAura's feet position and base, scale with the rig. A boss enlarged with `Model:ScaleTo(3)` gets an aura three times the size.
+
+**Test boss.** With `Config.DEBUG = true`, a black R15 rig scaled 3x spawns at `Config.Boss.DebugPosition`. Hold **Shift** and press **1-8** to make it cast that spell at you.
+
 ---
 
 ## Folder layout
@@ -44,12 +90,17 @@ src/
         Lightning.lua       segmented jagged Beam bolts, branches, crackle, ground arcs
         OrbitTrail.lua      white trails orbiting a character (or a helix)
         RuneCircle.lua      self-drawing rune seal made of beams
+        ImpactFrame.lua     anime impact frames (stark B/W screen flicker)
+        FocusLines.lua      screen-space radial speed lines
+        RockRing.lua        ground rocks erupting in a ring or along a line
+        Sphere.lua          expanding neon / ForceField energy spheres
       Spells/
         GrimoireAwakening.lua  VoidBurst.lua      AbyssalAura.lua   ThunderJudgment.lua
         InfernoSeal.lua        FrostRequiem.lua   GaleReaper.lua    CelestialVerdict.lua
     Remotes/                (created at runtime by SpellServer, not in the repo)
   ServerScriptService/
-    SpellServer.server.lua  validation, cooldowns, broadcast
+    SpellService.lua        spell API: validated player casts + CastFromModel for bosses
+    SpellServer.server.lua  boots SpellService; spawns the debug test boss when DEBUG
   StarterPlayer/StarterPlayerScripts/
     SpellClient.client.lua  receives broadcasts and renders the VFX
     VFXTestBinds.client.lua debug keys 1-8 + on-screen bind list
@@ -90,7 +141,7 @@ You don't need Rojo, git or this repo on the other device. Pick one of these:
 3. Paste the whole thing into the command bar and press **Enter**. The Output window prints `[GrimoireVFX] Installed.`
 4. Press **Play**, then press keys 1-8.
 
-The installer creates `ReplicatedStorage.VFX`, `ServerScriptService.SpellServer` and the two LocalScripts in `StarterPlayerScripts`. If any of these already exist it stops and tells you which ones, so it never overwrites your own scripts.
+The installer creates `ReplicatedStorage.VFX`, `ServerScriptService.SpellService` and `ServerScriptService.SpellServer`, plus the two LocalScripts in `StarterPlayerScripts`. If any of these already exist it stops and tells you which ones, so it never overwrites your own scripts.
 
 **Option B: drag in model files**
 Build the four model files with `rojo build packaging/<Name>.project.json -o dist/<Name>.rbxm`, or ask for them to be sent to you. Then drag each one into Studio and put it in the right place:
@@ -98,6 +149,7 @@ Build the four model files with `rojo build packaging/<Name>.project.json -o dis
 | File | Put it in |
 | --- | --- |
 | `VFX.rbxm` | `ReplicatedStorage` |
+| `SpellService.rbxm` | `ServerScriptService` |
 | `SpellServer.rbxm` | `ServerScriptService` |
 | `SpellClient.rbxm` | `StarterPlayer → StarterPlayerScripts` |
 | `VFXTestBinds.rbxm` | `StarterPlayer → StarterPlayerScripts` (optional; debug keys) |
@@ -178,7 +230,7 @@ Config entries are wrapped in typed constructors such as `spec({...})`, `bolt({.
 ## Remote event flow
 
 ```
- Client (caster)                     Server (SpellServer)                    All clients (SpellClient)
+ Client (caster)                     Server (SpellService)                   All clients (SpellClient)
  ───────────────                     ────────────────────                    ─────────────────────────
  key press
  CastSpell:FireServer(       ───▶    validate:
@@ -194,6 +246,7 @@ Config entries are wrapped in typed constructors such as `spec({...})`, `bolt({.
                                        active?)                              → particles, beams, tweens
 ```
 
+* For boss casts the first argument is the boss **Model** instead of a UserId (`SpellService.CastFromModel`).
 * The server **never** creates particles, and none of its handlers yield. The only scheduling it does is a `task.delay` that enforces AbyssalAura's `MaxDuration`.
 * `ReplicatedStorage.Remotes` (holding `CastSpell` and `PlaySpellVFX`) is created by the server at startup.
 * For looping spells the server sends `active = true/false`, which keeps every client in agreement. Loops also stop on death, respawn, player leave and `MaxDuration`.
