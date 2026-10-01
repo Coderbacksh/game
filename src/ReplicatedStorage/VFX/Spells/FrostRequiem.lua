@@ -11,6 +11,11 @@
 	   flash and ring, and a frozen star-pattern crack decal spreads.
 	3. After ShatterDelay seconds every spike shatters into tumbling glass
 	   fragments and is destroyed.
+
+	Boss-tier layers: a crown of giant crystals erupts at the target, ice
+	rocks burst up in a ring, a blizzard swirls over the impact, and the
+	hit adds impact frames, focus lines, an FOV punch and a white core
+	inside a pale-cyan ForceField shell. The shatter sends out a cyan ring.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -19,8 +24,12 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
+local RockRing = require(Util.RockRing)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.FrostRequiem.VFX
@@ -29,6 +38,30 @@ local Padding = Config.General.CleanupPadding
 local FrostRequiem = {}
 
 type Spike = { Part: Part, Base: Vector3 }
+
+-- Grows one crystal from under the ground at `base` with the given shape.
+local function growCrystal(
+	model: Model,
+	base: CFrame,
+	height: number,
+	width: number,
+	orientation: CFrame,
+	growTime: number
+): Spike
+	local spike = Emit.part(Vector3.new(width, height, width), C.SpikeColor, C.SpikeMaterial)
+	spike.Name = "FrostSpike"
+	spike.Transparency = C.SpikeTransparency
+	local buried = base * orientation * CFrame.new(0, -height / 2, 0)
+	local grown = base * orientation * CFrame.new(0, height * (0.5 - C.SpikeBury), 0)
+	spike.CFrame = buried
+	spike.Parent = model
+	Emit.tween(spike, growTime, { CFrame = grown }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+	local position = base.Position
+	Emit.burstAt(CFrame.new(position), C.Mist)
+	Emit.burstAt(CFrame.new(position), C.Snow)
+	return { Part = spike, Base = position }
+end
 
 local function growSpike(model: Model, base: CFrame, scale: number): Spike
 	local height = Emit.random(C.SpikeHeightMin, C.SpikeHeightMax) * scale
@@ -40,20 +73,30 @@ local function growSpike(model: Model, base: CFrame, scale: number): Spike
 		math.rad(C.SpikeBaseYaw) + Emit.random(0, math.pi),
 		Emit.random(-tilt, tilt)
 	)
+	return growCrystal(model, base, height, width, orientation, C.SpikeGrowTime)
+end
 
-	local spike = Emit.part(Vector3.new(width, height, width), C.SpikeColor, C.SpikeMaterial)
-	spike.Name = "FrostSpike"
-	spike.Transparency = C.SpikeTransparency
-	local buried = base * orientation * CFrame.new(0, -height / 2, 0)
-	local grown = base * orientation * CFrame.new(0, height * (0.5 - C.SpikeBury), 0)
-	spike.CFrame = buried
-	spike.Parent = model
-	Emit.tween(spike, C.SpikeGrowTime, { CFrame = grown }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-
-	local position = base.Position
-	Emit.burstAt(CFrame.new(position), C.Mist)
-	Emit.burstAt(CFrame.new(position), C.Snow)
-	return { Part = spike, Base = position }
+-- Crown of giant crystals leaning outward around `center`.
+local function growCluster(model: Model, center: Vector3, spikes: { Spike })
+	local cluster = C.Cluster
+	for i = 1, cluster.Count do
+		local angle = (i / cluster.Count) * math.pi * 2 + Emit.random(-cluster.AngleJitter, cluster.AngleJitter)
+		local outward = Vector3.new(math.cos(angle), 0, math.sin(angle))
+		local point = Emit.groundAt(center + outward * cluster.Radius)
+		local axis = Vector3.yAxis:Cross(outward).Unit
+		local lean = CFrame.fromAxisAngle(axis, math.rad(Emit.random(cluster.TiltMin, cluster.TiltMax)))
+		local orientation = lean * CFrame.Angles(0, math.rad(C.SpikeBaseYaw) + Emit.random(0, math.pi), 0)
+		local height = Emit.random(cluster.HeightMin, cluster.HeightMax)
+		local width = Emit.random(cluster.WidthMin, cluster.WidthMax)
+		task.delay((i - 1) * cluster.Stagger, function()
+			if model.Parent then
+				table.insert(
+					spikes,
+					growCrystal(model, CFrame.new(point), height, width, orientation, cluster.GrowTime)
+				)
+			end
+		end)
+	end
 end
 
 function FrostRequiem.Play(character: Model, targetPosition: Vector3)
@@ -114,6 +157,18 @@ function FrostRequiem.Play(character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(endGround, C.Decal)
 	CameraShake.Preset(C.ImpactShake, endGround)
 
+	-- Boss-tier layers.
+	growCluster(model, endGround, spikes)
+	ImpactFrame.Preset(C.Impact, impact)
+	FocusLines.Play(impact, C.Focus)
+	CameraShake.PunchPreset(C.Punch, impact)
+	Sphere.Layers(impact, C.Spheres)
+	RockRing.Ring(endGround, C.IceRocks)
+	local blizzard = C.Blizzard
+	local stormSize = Vector3.new(blizzard.Radius * 2, Config.General.AnchorSize.Y, blizzard.Radius * 2)
+	local storm = Emit.anchor(CFrame.new(endGround), blizzard.Duration + blizzard.Spec.Lifetime.Max, stormSize)
+	Emit.pulse(Emit.emitter(storm, blizzard.Spec), blizzard.Count, blizzard.Interval, blizzard.Duration)
+
 	-------------------------------------------------------------------
 	-- 3. Spikes shatter.
 	-------------------------------------------------------------------
@@ -130,6 +185,7 @@ function FrostRequiem.Play(character: Model, targetPosition: Vector3)
 			spike.Part:Destroy()
 		end
 	end
+	Shockwave.Ground(endGround, C.ShatterRing)
 	rim:Destroy()
 	model:Destroy()
 end

@@ -8,7 +8,14 @@
 	3. Ends with a white flash core and a shockwave ring, leaving glowing
 	   embers drifting off a cracked ground decal with crimson ember cracks.
 
-	Crimson is only used for flames, embers, light and crack glow.
+	Boss-tier layers: crimson flames lick up along the seal's edge while it
+	draws; the eruption tears a ring of basalt rocks out of the ground with
+	an FOV punch, and crimson + black flame ribbons coil up the pillar.
+	The finale adds impact frames, focus lines and a white core sphere in a
+	crimson ForceField shell.
+
+	Crimson is only used for flames, embers, light, crack glow and the
+	finale's outer shell.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -16,9 +23,14 @@ local Util = script.Parent.Parent.Util
 local CameraShake = require(Util.CameraShake)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
+local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
 local RuneCircle = require(Util.RuneCircle)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.InfernoSeal.VFX
@@ -33,6 +45,11 @@ function InfernoSeal.Play(_character: Model, targetPosition: Vector3)
 	-- 1. Seal draws itself.
 	-------------------------------------------------------------------
 	RuneCircle.Spawn(groundCFrame, C.Seal)
+	-- Flames licking up along the seal's edge for its whole life.
+	local ringLife = C.Seal.DrawTime + C.Seal.Hold
+	local ringSize = Vector3.new(C.Seal.Radius * 2, Config.General.AnchorSize.Y, C.Seal.Radius * 2)
+	local ringHost = Emit.anchor(groundCFrame, ringLife + C.FireRing.Spec.Lifetime.Max, ringSize)
+	Emit.pulse(Emit.emitter(ringHost, C.FireRing.Spec), C.FireRing.Count, C.FireRing.Interval, ringLife)
 	task.wait(C.Seal.DrawTime)
 
 	-------------------------------------------------------------------
@@ -51,6 +68,49 @@ function InfernoSeal.Play(_character: Model, targetPosition: Vector3)
 	for _, burst in { C.BlackFlames, C.CrimsonFlames, C.Embers, C.FlickerSmoke } do
 		local emitter = Emit.emitter(pillar, burst.Spec)
 		Emit.pulse(emitter, burst.Count, C.PulseInterval, C.PillarDuration)
+	end
+
+	-- Eruption: rocks + FOV punch + coiling flame ribbons.
+	RockRing.Ring(ground, C.EruptRocks)
+	CameraShake.PunchPreset(C.EruptPunch, ground)
+	CameraShake.Preset(C.EruptShake, ground)
+	local spiral = C.Spirals
+	local flameStyle: Types.TrailStyle = {
+		Width = spiral.Width,
+		Lifetime = spiral.Lifetime,
+		Color = spiral.Color,
+		Transparency = spiral.Transparency,
+		LightEmission = spiral.LightEmission,
+		Brightness = spiral.Brightness,
+	}
+	local inkStyle: Types.TrailStyle = {
+		Width = spiral.InkWidth,
+		Lifetime = spiral.Lifetime,
+		Color = Config.Palette.Black,
+		Transparency = spiral.Transparency,
+		LightEmission = 0,
+		Brightness = spiral.InkBrightness,
+	}
+	local center = CFrame.new(ground)
+	for i = 1, spiral.Count do
+		local phase = (i / spiral.Count) * math.pi * 2
+		type Ribbon = { Style: Types.TrailStyle, PhaseOffset: number }
+		local ribbons: { Ribbon } = {
+			{ Style = flameStyle, PhaseOffset = 0 },
+			{ Style = inkStyle, PhaseOffset = math.pi / spiral.Count }, -- black ribbons sit between the flames
+		}
+		for _, ribbon in ribbons do
+			OrbitTrail.Start(function(): CFrame?
+				return center
+			end, {
+				Radius = spiral.Radius,
+				Height = 0,
+				Speed = spiral.Speed,
+				Tilt = Vector3.zero,
+				Phase = phase + ribbon.PhaseOffset,
+				RiseSpeed = spiral.RiseSpeed,
+			}, ribbon.Style, C.PillarDuration)
+		end
 	end
 
 	local light = Instance.new("PointLight")
@@ -79,6 +139,10 @@ function InfernoSeal.Play(_character: Model, targetPosition: Vector3)
 	Shockwave.Ground(ground, C.EndRing)
 	GroundDecal.Spawn(ground, C.Decal)
 	CameraShake.Preset(C.Shake, ground)
+	ImpactFrame.Preset(C.EndImpact, core)
+	FocusLines.Play(core, C.EndFocus)
+	CameraShake.PunchPreset(C.EndPunch, core)
+	Sphere.Layers(core, C.EndSpheres)
 
 	local emberSize = Vector3.new(C.Decal.Radius * 2, C.PillarHeight, C.Decal.Radius * 2)
 	local emberHost = Emit.anchor(groundCFrame, C.GroundEmbers.Duration + C.GroundEmbers.Spec.Lifetime.Max, emberSize)

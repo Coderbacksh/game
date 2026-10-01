@@ -11,6 +11,12 @@
 	     white trails orbit the caster for Orbit.Duration seconds.
 	  5. The open book settles into a faint idle glow, then fades away.
 
+	Boss-tier layers: the book opening fires impact frames, focus lines, an
+	FOV punch, a white ring and a white core inside a black ForceField
+	shell. During the glyph phase white arcs jump between neighbouring
+	glyphs, an ink storm swirls up around the caster and white motes rise
+	out of the ring.
+
 	The book follows the caster's hand every frame. Everything is parented
 	to one Folder that is destroyed at the end (and scheduled with Debris as
 	a safety net), so repeated casts never leak.
@@ -19,9 +25,14 @@
 local Config = require(script.Parent.Parent.Config)
 local Util = script.Parent.Parent.Util
 local Emit = require(Util.Emit)
+local CameraShake = require(Util.CameraShake)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
 local OrbitTrail = require(Util.OrbitTrail)
+local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.GrimoireAwakening.VFX
@@ -228,6 +239,13 @@ function GrimoireAwakening.Play(character: Model, _targetPosition: Vector3)
 	Emit.burstAt(CFrame.new(openPosition), { Spec = Config.Emitters.WhiteSparks, Count = C.OpenSparks })
 	Emit.burstAt(CFrame.new(openPosition), { Spec = Config.Emitters.CoreFlare, Count = 1 })
 	light.Brightness = C.IdleLight.Brightness
+	ImpactFrame.Preset(C.OpenImpact, openPosition)
+	FocusLines.Play(openPosition, C.OpenFocus)
+	CameraShake.PunchPreset(C.OpenPunch, openPosition)
+	CameraShake.Preset(C.OpenShake, openPosition)
+	Sphere.Layers(openPosition, C.OpenSpheres)
+	local feet = Emit.feet(character) or root.Position
+	Shockwave.Ground(feet, C.OpenRing)
 
 	-------------------------------------------------------------------
 	-- 5. Glyph ring at waist height + two orbiting trails.
@@ -252,6 +270,21 @@ function GrimoireAwakening.Play(character: Model, _targetPosition: Vector3)
 	end
 	local glyphAngle = 0
 	local glyphCenter = CFrame.new(root.Position)
+
+	-- Ink storm + rising motes on a cylinder host that follows the caster.
+	local storm = C.InkStorm
+	local stormSize = Vector3.new(storm.Radius * 2, storm.Height, storm.Radius * 2)
+	local stormHost = Emit.anchor(CFrame.new(feet), nil, stormSize)
+	stormHost.Parent = group
+	Emit.pulse(Emit.emitter(stormHost, storm.Spec), storm.Count, storm.Interval, C.Orbit.Duration)
+	Emit.pulse(
+		Emit.emitter(stormHost, C.RisingRunes.Spec),
+		C.RisingRunes.Count,
+		C.RisingRunes.Interval,
+		C.Orbit.Duration
+	)
+	local webTimer = 0
+
 	Emit.step(C.Orbit.Duration + C.GlyphFadeIn, function(_alpha, dt, elapsed)
 		if not group.Parent then
 			return true
@@ -259,6 +292,15 @@ function GrimoireAwakening.Play(character: Model, _targetPosition: Vector3)
 		local currentRoot = Emit.root(character)
 		if currentRoot then
 			glyphCenter = CFrame.new(currentRoot.Position)
+			stormHost.CFrame = CFrame.new(Emit.feet(character) or currentRoot.Position)
+		end
+		-- Arcs jumping between neighbouring glyphs.
+		webTimer += dt
+		if webTimer >= C.GlyphWeb.Interval and elapsed < C.Orbit.Duration and #glyphs > 1 then
+			webTimer = 0
+			local i = Emit.randomInt(1, #glyphs)
+			local a, b = glyphs[i], glyphs[(i % #glyphs) + 1]
+			Lightning.Strike(a.Position, b.Position, C.GlyphWeb.Bolt)
 		end
 		glyphAngle += C.GlyphSpinSpeed * dt
 		for i, glyph in glyphs do

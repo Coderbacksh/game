@@ -13,6 +13,11 @@
 
 	On contact it splits into smaller fading crescents, kicks up dust and
 	debris, and carves a long slash-shaped crack decal along its path.
+
+	Boss-tier layers: Slashes.Count crescents fire in quick succession at
+	alternating angles on parallel paths. Rocks erupt along both sides of
+	the slash line, and the final hit adds impact frames, focus lines, an
+	FOV punch and a white core inside a black ForceField shell.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -21,8 +26,12 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.GaleReaper.VFX
@@ -137,10 +146,11 @@ local function launch(
 	distance: number,
 	duration: number,
 	fade: boolean,
+	rollDegrees: number,
 	onArrive: (() -> ())?
 )
 	local host = crescent.Host
-	local roll = CFrame.Angles(0, 0, math.rad(C.RollDegrees))
+	local roll = CFrame.Angles(0, 0, math.rad(rollDegrees))
 	local function place(alpha: number)
 		local position = from + direction * distance * alpha
 		host.CFrame = CFrame.lookAt(position, position + direction) * roll
@@ -192,13 +202,12 @@ function GaleReaper.Play(character: Model, targetPosition: Vector3)
 	local direction = if distance > 1e-3 then delta.Unit else root.CFrame.LookVector
 	local travelTime = math.max(distance / C.Speed, C.MinTravelTime)
 
-	local blade = buildCrescent(1)
-	local speedLines = Emit.emitter(blade.Host, C.SpeedLines.Spec)
-	local wake = Emit.emitter(blade.Host, C.WakeSmoke.Spec)
-	Emit.pulse(speedLines, C.SpeedLines.Count, C.SpeedLines.Interval, travelTime)
-	Emit.pulse(wake, C.WakeSmoke.Count, C.SpeedLines.Interval, travelTime)
+	local side = direction:Cross(Vector3.yAxis)
+	side = if side.Magnitude > 1e-3 then side.Unit else root.CFrame.RightVector
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	local flatDirection = if flat.Magnitude > 1e-3 then flat.Unit else root.CFrame.LookVector
+	local slashes = C.Slashes
 
-	-- Wind spirals wrapping the travel axis.
 	local spiralStyle: Types.TrailStyle = {
 		Width = C.Spirals.Width,
 		Lifetime = C.Spirals.Lifetime,
@@ -208,44 +217,82 @@ function GaleReaper.Play(character: Model, targetPosition: Vector3)
 		Brightness = C.Spirals.Brightness,
 	}
 	local axisTurn = CFrame.Angles(math.pi / 2, 0, 0) -- orbit plane perpendicular to travel
-	for i = 1, C.Spirals.Count do
-		OrbitTrail.Start(function(): CFrame?
-			if not blade.Host.Parent then
-				return nil
-			end
-			return blade.Host.CFrame * axisTurn
-		end, {
-			Radius = C.Spirals.Radius,
-			Height = 0,
-			Speed = C.Spirals.Speed,
-			Tilt = Vector3.zero,
-			Phase = (i / C.Spirals.Count) * math.pi * 2,
-		}, spiralStyle, travelTime)
-	end
 
-	launch(blade, start, direction, distance, travelTime, false, function()
-		local ground = Emit.groundAt(finish)
-		local flat = Vector3.new(direction.X, 0, direction.Z)
-		local flatDirection = if flat.Magnitude > 1e-3 then flat.Unit else root.CFrame.LookVector
+	local function fireSlash(index: number)
+		local isFinal = index == slashes.Count
+		local offset = side * ((index - (slashes.Count + 1) / 2) * slashes.SideOffset)
+		local from = start + offset
+		local to = finish + offset
+		local roll = slashes.Rolls[((index - 1) % #slashes.Rolls) + 1]
 
-		-- Split into smaller crescents fanning outward.
-		local spread = math.rad(C.Split.SpreadDegrees)
-		for i = 1, C.Split.Count do
-			local t = if C.Split.Count > 1 then (i - 1) / (C.Split.Count - 1) else 0.5
-			local yaw = CFrame.Angles(0, -spread / 2 + spread * t, 0)
-			local splitDirection = (yaw * direction).Unit
-			launch(buildCrescent(C.Split.Scale), finish, splitDirection, C.Split.Distance, C.Split.Duration, true, nil)
+		local blade = buildCrescent(1)
+		local speedLines = Emit.emitter(blade.Host, C.SpeedLines.Spec)
+		local wake = Emit.emitter(blade.Host, C.WakeSmoke.Spec)
+		Emit.pulse(speedLines, C.SpeedLines.Count, C.SpeedLines.Interval, travelTime)
+		Emit.pulse(wake, C.WakeSmoke.Count, C.SpeedLines.Interval, travelTime)
+
+		-- Wind spirals wrapping the travel axis.
+		for i = 1, C.Spirals.Count do
+			OrbitTrail.Start(function(): CFrame?
+				if not blade.Host.Parent then
+					return nil
+				end
+				return blade.Host.CFrame * axisTurn
+			end, {
+				Radius = C.Spirals.Radius,
+				Height = 0,
+				Speed = C.Spirals.Speed,
+				Tilt = Vector3.zero,
+				Phase = (i / C.Spirals.Count) * math.pi * 2,
+			}, spiralStyle, travelTime)
 		end
 
-		Flash.Impact(finish, C.Flash)
-		Emit.burstAt(CFrame.new(ground), C.Dust)
-		Debris.Shards(ground, C.Shards)
-		-- The slash decal is centred half its length back along the path.
-		local slashLength = C.Decal.Length or C.Decal.Radius * 2
-		local decalCenter = ground - flatDirection * (slashLength / 2)
-		GroundDecal.Spawn(decalCenter, C.Decal, flatDirection)
-		CameraShake.Preset(C.Shake, ground)
-	end)
+		launch(blade, from, direction, distance, travelTime, false, roll, function()
+			local ground = Emit.groundAt(to)
+
+			-- Split into smaller crescents fanning outward.
+			local spread = math.rad(C.Split.SpreadDegrees)
+			for i = 1, C.Split.Count do
+				local t = if C.Split.Count > 1 then (i - 1) / (C.Split.Count - 1) else 0.5
+				local yaw = CFrame.Angles(0, -spread / 2 + spread * t, 0)
+				local splitDirection = (yaw * direction).Unit
+				launch(
+					buildCrescent(C.Split.Scale),
+					to,
+					splitDirection,
+					C.Split.Distance,
+					C.Split.Duration,
+					true,
+					roll,
+					nil
+				)
+			end
+
+			Flash.Impact(to, C.Flash)
+			Emit.burstAt(CFrame.new(ground), C.Dust)
+			Debris.Shards(ground, C.Shards)
+			-- The slash decal is centred half its length back along the path.
+			local slashLength = C.Decal.Length or C.Decal.Radius * 2
+			local decalCenter = ground - flatDirection * (slashLength / 2)
+			GroundDecal.Spawn(decalCenter, C.Decal, flatDirection)
+			CameraShake.Preset(C.Shake, ground)
+
+			if isFinal then
+				ImpactFrame.Preset(C.Impact, to)
+				FocusLines.Play(to, C.Focus)
+				CameraShake.PunchPreset(C.Punch, to)
+				Sphere.Layers(to, C.Spheres)
+				RockRing.Line(Emit.groundAt(start), ground, C.PathRocks)
+			end
+		end)
+	end
+
+	for index = 1, slashes.Count do
+		fireSlash(index)
+		if index < slashes.Count then
+			task.wait(slashes.Interval)
+		end
+	end
 end
 
 -- Typed export: the checker verifies this module matches Types.SpellModule.

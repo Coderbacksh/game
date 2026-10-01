@@ -14,6 +14,12 @@
 	   hanging mid-air before falling.
 	5. The pillar fades and Lighting is restored to its original values.
 
+	Boss-tier layers: lightning crawls over the rune circle while it charges
+	and focus lines snap toward it; the impact adds a 5-step impact-frame
+	sequence, a huge FOV punch, three nested spheres (white core, black and
+	white ForceField shells), two rings of erupting rocks, and eight smaller
+	light spears slamming down around the main pillar.
+
 	Overlapping casts share one dim: a reference count makes sure Lighting
 	is only restored after the last cast finishes.
 ]]
@@ -26,11 +32,15 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
 local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
 local RuneCircle = require(Util.RuneCircle)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.CelestialVerdict.VFX
@@ -96,8 +106,16 @@ end
 ---------------------------------------------------------------------------
 -- The light pillar.
 ---------------------------------------------------------------------------
-local function pillar(sky: Vector3, ground: Vector3)
-	local P = C.Pillar
+type PillarParams = {
+	CrashTime: number,
+	Duration: number,
+	FadeTime: number,
+	CoreWidth: number,
+	GlowWidth: number,
+	GlowTransparency: number,
+}
+
+local function pillar(sky: Vector3, ground: Vector3, P: PillarParams)
 	local total = P.CrashTime + P.Duration + P.FadeTime
 	local host = Emit.anchor(CFrame.new(ground), total)
 	local top = Emit.attachment(host, CFrame.new(sky - ground))
@@ -107,10 +125,10 @@ local function pillar(sky: Vector3, ground: Vector3)
 		local b = Instance.new("Beam")
 		b.Attachment0 = top
 		b.Attachment1 = bottom
-		b.Color = ColorSequence.new(P.Color)
+		b.Color = ColorSequence.new(C.Pillar.Color)
 		b.LightEmission = 1
 		b.LightInfluence = 0
-		b.Brightness = P.Brightness
+		b.Brightness = C.Pillar.Brightness
 		b.FaceCamera = true
 		b.Segments = 1
 		b.Width0 = width
@@ -157,12 +175,25 @@ function CelestialVerdict.Play(_character: Model, targetPosition: Vector3)
 	-- something later in this function errors.
 	task.delay(C.CircleTime + C.Pillar.CrashTime + C.Pillar.Duration + C.Pillar.FadeTime, restoreSky)
 	RuneCircle.Spawn(CFrame.new(sky), C.Circle)
-	task.wait(C.CircleTime)
+	-- Lightning crawling over the circle while it charges.
+	local arcs = C.ChargeArcs
+	for _ = 1, arcs.Count do
+		Lightning.Bolt(function()
+			local a = Emit.random(0, math.pi * 2)
+			local b = a + Emit.random(-arcs.Span, arcs.Span)
+			local r = arcs.Radius
+			return sky + Vector3.new(math.cos(a) * r, 0, math.sin(a) * r),
+				sky + Vector3.new(math.cos(b) * r, 0, math.sin(b) * r)
+		end, arcs.Bolt)
+	end
+	task.wait(C.CircleTime - C.ChargeFocus.Duration)
+	FocusLines.Play(sky, C.ChargeFocus)
+	task.wait(C.ChargeFocus.Duration)
 
 	-------------------------------------------------------------------
 	-- 3. Pillar crashes down.
 	-------------------------------------------------------------------
-	pillar(sky, ground)
+	pillar(sky, ground, C.Pillar)
 
 	local boltParams = C.PillarBolts.Bolt
 	for i = 1, C.PillarBolts.Count do
@@ -213,6 +244,28 @@ function CelestialVerdict.Play(_character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(ground, C.Decal)
 	Debris.Shards(ground, C.Shards)
 	CameraShake.Preset(C.Shake, ground)
+
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.Impact, ground)
+	FocusLines.Play(ground, C.Focus)
+	CameraShake.PunchPreset(C.Punch, ground)
+	Sphere.Layers(ground, C.Spheres)
+	RockRing.Ring(ground, C.Rocks)
+	task.delay(C.OuterRocksDelay, RockRing.Ring, ground, C.OuterRocks)
+
+	-- Light spears slamming down around the main pillar.
+	local spears = C.Spears
+	task.wait(spears.Delay)
+	for i = 1, spears.Count do
+		local angle = (i / spears.Count) * math.pi * 2 + Emit.random(-spears.AngleJitter, spears.AngleJitter)
+		local spot = Emit.groundAt(ground + Vector3.new(math.cos(angle), 0, math.sin(angle)) * spears.Radius)
+		pillar(spot + Vector3.yAxis * spears.Height, spot, spears)
+		task.delay(spears.CrashTime, function()
+			Flash.Impact(spot, spears.Flash)
+			Shockwave.Ground(spot, spears.Ring)
+		end)
+		task.wait(spears.Interval)
+	end
 	-- 5. The pillar fades by itself; Lighting is restored by the delay above.
 end
 

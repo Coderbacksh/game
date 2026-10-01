@@ -11,6 +11,12 @@
 	   crawling along the ground, scorched crack decal, spark burst and
 	   small neon sparks that physically bounce on the ground.
 
+	Boss-tier layers: smaller pre-strikes hammer the area around the target
+	before the main bolt; the main impact adds impact frames, focus lines,
+	an FOV punch, a white core sphere in a glowing ForceField shell, a ring
+	of rocks erupting from the ground, and static electricity that keeps
+	crackling over the crater for Residual.Duration seconds.
+
 	Bouncing sparks are client-local unanchored parts removed by Debris.
 ]]
 
@@ -19,8 +25,12 @@ local Util = script.Parent.Parent.Util
 local CameraShake = require(Util.CameraShake)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
+local RockRing = require(Util.RockRing)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.ThunderJudgment.VFX
@@ -75,13 +85,27 @@ function ThunderJudgment.Play(_character: Model, targetPosition: Vector3)
 	-------------------------------------------------------------------
 	-- 1. Clouds gather.
 	-------------------------------------------------------------------
-	local cloudLife = C.GatherTime + C.MainBolt.Duration + C.Clouds.Spec.Lifetime.Max
-	local cloudHost = Emit.anchor(CFrame.new(sky), cloudLife, C.CloudSize)
+	local pre = C.PreStrikes
+	local stormTime = C.GatherTime + pre.Count * pre.Interval + C.MainBolt.Duration
+	local cloudHost = Emit.anchor(CFrame.new(sky), stormTime + C.Clouds.Spec.Lifetime.Max, C.CloudSize)
 	local clouds = Emit.emitter(cloudHost, C.Clouds.Spec)
-	Emit.pulse(clouds, C.Clouds.Count, C.Clouds.Interval, C.GatherTime + C.MainBolt.Duration)
+	Emit.pulse(clouds, C.Clouds.Count, C.Clouds.Interval, stormTime)
 	Lightning.Crackle(sky, C.CloudCrackle.Radius, C.CloudCrackle.Count, C.CloudCrackle.Bolt)
 
 	task.wait(C.GatherTime)
+
+	-- Pre-strikes scattered around the target.
+	local preBolt = table.clone(C.MainBolt)
+	preBolt.Width = C.MainBolt.Width * pre.WidthScale
+	for _ = 1, pre.Count do
+		local angle = Emit.random(0, math.pi * 2)
+		local spot =
+			Emit.groundAt(ground + Vector3.new(math.cos(angle), 0, math.sin(angle)) * Emit.random(0, pre.Scatter))
+		Lightning.Strike(sky + (spot - ground) * Vector3.new(1, 0, 1), spot, preBolt)
+		Flash.Impact(spot, pre.Flash)
+		Emit.burstAt(CFrame.new(spot), pre.Sparks)
+		task.wait(pre.Interval)
+	end
 
 	-------------------------------------------------------------------
 	-- 2. The bolt.
@@ -101,6 +125,34 @@ function ThunderJudgment.Play(_character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(ground, C.Decal)
 	bouncingSparks(ground)
 	CameraShake.Preset(C.Shake, ground)
+
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.Impact, impact)
+	FocusLines.Play(impact, C.Focus)
+	CameraShake.PunchPreset(C.Punch, impact)
+	Sphere.Layers(impact, C.Spheres)
+	RockRing.Ring(ground, C.Rocks)
+
+	-- Residual static crackling over the crater.
+	local residual = C.Residual
+	local timer = residual.Interval
+	Emit.step(residual.Duration, function(_alpha, dt)
+		timer += dt
+		if timer >= residual.Interval then
+			timer = 0
+			for _ = 1, residual.Count do
+				local a = Emit.random(0, math.pi * 2)
+				local from = ground + Vector3.new(math.cos(a), 0, math.sin(a)) * Emit.random(0, residual.Radius)
+				local b = a + Emit.random(-residual.AngleWander, residual.AngleWander)
+				local to = from
+					+ Vector3.new(math.cos(b), 0, math.sin(b))
+						* Emit.random(residual.ArcLengthMin, residual.ArcLengthMax)
+				local lift = Vector3.yAxis * C.GroundArcs.Lift
+				Lightning.Strike(Emit.groundAt(from) + lift, Emit.groundAt(to) + lift, residual.Bolt)
+			end
+		end
+		return false
+	end)
 end
 
 -- Typed export: the checker verifies this module matches Types.SpellModule.

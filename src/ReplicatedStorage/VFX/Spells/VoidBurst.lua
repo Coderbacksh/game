@@ -8,6 +8,10 @@
 	   lens-flare streak, white crackling electricity around the core,
 	   curved black shockwave arcs spraying outward, a white ground ring,
 	   a circular crack decal and dark shards that float up then drop.
+	3. Boss-tier layers on detonation: anime impact frames + focus lines,
+	   a white core sphere inside expanding black/white ForceField shells,
+	   a ring of rocks erupting from the ground, an FOV punch, a delayed
+	   black aftershock ring and smoke that lingers over the crater.
 
 	All instances are owned by self-cleaning utilities (Debris / step
 	callbacks), so nothing persists after the effect.
@@ -19,9 +23,13 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
+local RockRing = require(Util.RockRing)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.VoidBurst.VFX
@@ -70,6 +78,23 @@ function VoidBurst.Play(_character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(ground, C.Decal)
 	Debris.Shards(ground, C.Shards)
 	CameraShake.Preset(C.Shake, core)
+
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.Impact, core)
+	FocusLines.Play(core, C.Focus)
+	CameraShake.PunchPreset(C.Punch, core)
+	Sphere.Layers(core, C.Spheres)
+	RockRing.Ring(ground, C.Rocks)
+
+	local linger = C.LingerSmoke
+	local lingerSize = Vector3.new(linger.Radius * 2, Config.General.AnchorSize.Y, linger.Radius * 2)
+	local lingerHost = Emit.anchor(CFrame.new(ground), linger.Duration + linger.Spec.Lifetime.Max, lingerSize)
+	Emit.pulse(Emit.emitter(lingerHost, linger.Spec), linger.Count, linger.Interval, linger.Duration)
+
+	task.wait(C.Aftershock.Delay)
+	Shockwave.Ground(ground, C.Aftershock.Ring)
+	Emit.burstAt(CFrame.new(ground), C.Aftershock.Smoke)
+	CameraShake.Preset(C.Aftershock.Shake, ground)
 end
 
 -- Typed export: the checker verifies this module matches Types.SpellModule.
