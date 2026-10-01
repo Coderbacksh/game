@@ -21,6 +21,10 @@ The art direction is dark, anime-style magic: mostly black and white with very h
 
 ```
 default.project.json        Rojo project → maps src/ to Roblox services
+packaging/                  Rojo projects that build drag-in .rbxm model files
+tools/make_installer.py     generates dist/InstallGrimoireVFX.lua (command-bar installer)
+dist/InstallGrimoireVFX.lua paste-into-Studio installer for other games
+preview/                    browser mockup of every spell + screenshots
 aftman.toml                 pinned rojo / stylua / selene versions
 selene.toml, stylua.toml    lint + format config
 src/
@@ -73,6 +77,34 @@ To build a standalone place file instead of syncing, run:
 rojo build -o LifeOfGrimoireVFX.rbxlx
 ```
 Place files are gitignored, so they never get committed.
+
+---
+
+## Copying the VFX into a different game
+
+You don't need Rojo, git or this repo on the other device. Pick one of these:
+
+**Option A: paste one script (easiest)**
+1. Copy everything in [`dist/InstallGrimoireVFX.lua`](dist/InstallGrimoireVFX.lua). On GitHub, open the file, click **Raw**, then select all and copy.
+2. In Roblox Studio, open the other game and go to **View → Command Bar**.
+3. Paste the whole thing into the command bar and press **Enter**. The Output window prints `[GrimoireVFX] Installed.`
+4. Press **Play**, then press keys 1-8.
+
+The installer creates `ReplicatedStorage.VFX`, `ServerScriptService.SpellServer` and the two LocalScripts in `StarterPlayerScripts`. If any of these already exist it stops and tells you which ones, so it never overwrites your own scripts.
+
+**Option B: drag in model files**
+Build the four model files with `rojo build packaging/<Name>.project.json -o dist/<Name>.rbxm`, or ask for them to be sent to you. Then drag each one into Studio and put it in the right place:
+
+| File | Put it in |
+| --- | --- |
+| `VFX.rbxm` | `ReplicatedStorage` |
+| `SpellServer.rbxm` | `ServerScriptService` |
+| `SpellClient.rbxm` | `StarterPlayer → StarterPlayerScripts` |
+| `VFXTestBinds.rbxm` | `StarterPlayer → StarterPlayerScripts` (optional; debug keys) |
+
+After you change any code, run `python3 tools/make_installer.py` to regenerate the installer.
+
+**Preview without Studio:** open [`preview/index.html`](preview/index.html) in a browser to watch an animated mockup of all 8 spells. Stills are in `preview/screenshots/`. These are drawn on a 2D canvas from the Config timings and colours, so treat them as a guide to composition and pacing, not real in-engine renders.
 
 ---
 
