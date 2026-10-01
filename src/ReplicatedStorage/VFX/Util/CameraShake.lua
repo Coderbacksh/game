@@ -107,6 +107,82 @@ function CameraShake.Shake(params: Types.ShakeParams, source: Vector3?)
 	end
 end
 
+---------------------------------------------------------------------------
+-- FOV punch: the camera's field of view kicks out and eases back. Punches
+-- add together; the original FOV is restored exactly when the last ends.
+---------------------------------------------------------------------------
+type ActivePunch = { Delta: number, InTime: number, OutTime: number, Start: number }
+local punches: { ActivePunch } = {}
+local baseFov: number? = nil
+local punchConnection: RBXScriptConnection? = nil
+
+local function punchOffset(punch: ActivePunch, t: number): number
+	if t < punch.InTime then
+		local a = t / punch.InTime
+		return punch.Delta * (1 - (1 - a) ^ 3)
+	end
+	local a = math.clamp((t - punch.InTime) / punch.OutTime, 0, 1)
+	return punch.Delta * (1 - a) ^ 2
+end
+
+function CameraShake.Punch(params: Types.PunchParams, source: Vector3?)
+	local camera = Workspace.CurrentCamera
+	if not RunService:IsClient() or camera == nil then
+		return
+	end
+	local scale = distanceScale(source, camera)
+	if scale <= 0 then
+		return
+	end
+	if baseFov == nil then
+		baseFov = camera.FieldOfView
+	end
+	table.insert(
+		punches,
+		{ Delta = params.FovDelta * scale, InTime = params.InTime, OutTime = params.OutTime, Start = os.clock() }
+	)
+	if punchConnection then
+		return
+	end
+	punchConnection = RunService.RenderStepped:Connect(function()
+		local cam = Workspace.CurrentCamera
+		local base = baseFov
+		if cam == nil or base == nil then
+			return
+		end
+		local now = os.clock()
+		local total = 0
+		for index = #punches, 1, -1 do
+			local punch = punches[index]
+			local t = now - punch.Start
+			if t >= punch.InTime + punch.OutTime then
+				table.remove(punches, index)
+			else
+				total += punchOffset(punch, t)
+			end
+		end
+		cam.FieldOfView = math.clamp(base + total, Settings.MinFov, Settings.MaxFov)
+		if #punches == 0 then
+			cam.FieldOfView = base
+			baseFov = nil
+			local connection = punchConnection
+			punchConnection = nil
+			if connection then
+				connection:Disconnect()
+			end
+		end
+	end)
+end
+
+function CameraShake.PunchPreset(name: string, source: Vector3?)
+	local preset = (Settings.Punches :: any)[name] :: Types.PunchParams?
+	if preset then
+		CameraShake.Punch(preset, source)
+	else
+		warn("[VFX] Unknown camera punch preset:", name)
+	end
+end
+
 -- Shake using a named preset from Config.CameraShake.Presets.
 function CameraShake.Preset(name: string, source: Vector3?)
 	local preset = (Settings.Presets :: any)[name] :: Types.ShakeParams?

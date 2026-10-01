@@ -19,6 +19,15 @@ local Config = {}
 -- (no key binds, no on-screen label). Ship with this set to false.
 Config.DEBUG = true
 
+-- Global intensity. Particles multiplies every burst count and emitter
+-- Rate (2 = twice as many particles). MaxPerBurst caps any single :Emit()
+-- so a world-boss cast can't freeze low-end phones. Lower Particles to
+-- ~0.6 if mobile players struggle.
+Config.Intensity = {
+	Particles = 1.6,
+	MaxPerBurst = 400,
+}
+
 ---------------------------------------------------------------------------
 -- Helpers used only to build the tables below (keeps the data readable).
 ---------------------------------------------------------------------------
@@ -63,6 +72,18 @@ local function rune(t: Types.RuneCircleParams): Types.RuneCircleParams
 	return t
 end
 local function orbit(t: Types.OrbitParams): Types.OrbitParams
+	return t
+end
+local function rocks(t: Types.RockParams): Types.RockParams
+	return t
+end
+local function sphere(t: Types.SphereParams): Types.SphereParams
+	return t
+end
+local function focus(t: Types.FocusLineParams): Types.FocusLineParams
+	return t
+end
+local function impact(t: Types.ImpactFrameParams): Types.ImpactFrameParams
 	return t
 end
 
@@ -154,6 +175,18 @@ Config.Network = {
 	GlobalCastInterval = 0.15, -- seconds between ANY two casts per player (anti-spam)
 }
 
+-- World boss. Your boss AI casts with SpellService.CastFromModel (server).
+-- The Debug* values only matter when DEBUG = true: a test boss spawns and
+-- Shift + 1-8 makes it cast at you.
+Config.Boss = {
+	DebugName = "GrimoireTestBoss",
+	DebugScale = 3, -- Model:ScaleTo factor (3 = three times player size)
+	DebugPosition = Vector3.new(0, 12, -45),
+	DebugColor = Color3.fromRGB(12, 12, 16),
+	DebugRemote = "DebugBossCast",
+	DebugCastInterval = 0.4, -- seconds between debug boss casts per player
+}
+
 -- Debug test harness (VFXTestBinds.client.lua). Only active when DEBUG = true.
 Config.TestBinds = {
 	GuiName = "GrimoireVFXTestBinds",
@@ -169,6 +202,7 @@ Config.TestBinds = {
 	BackgroundColor = Color3.fromRGB(8, 8, 10),
 	BackgroundTransparency = 0.35,
 	ActiveSuffix = "  [ON]", -- shown next to looping spells that are running
+	BossHint = "[Shift+key] test boss casts at you",
 }
 
 ---------------------------------------------------------------------------
@@ -179,6 +213,15 @@ Config.CameraShake = {
 	RotationScale = 0.6, -- degrees of rotation per stud of positional shake
 	MinDistance = 15, -- full strength inside this distance
 	MaxDistance = 220, -- no shake beyond this distance
+	MinFov = 30,
+	MaxFov = 110,
+	-- FOV kicks (CameraShake.Punch): degrees added at the peak.
+	Punches = {
+		Small = { FovDelta = 4, InTime = 0.05, OutTime = 0.35 },
+		Medium = { FovDelta = 8, InTime = 0.05, OutTime = 0.5 },
+		Heavy = { FovDelta = 14, InTime = 0.06, OutTime = 0.7 },
+		Ultimate = { FovDelta = 24, InTime = 0.08, OutTime = 1.2 },
+	},
 	Presets = {
 		Light = { Magnitude = 0.25, Frequency = 18, Duration = 0.35 },
 		Medium = { Magnitude = 0.55, Frequency = 20, Duration = 0.5 },
@@ -217,6 +260,85 @@ Config.Flash = {
 			Screen = { Color = Palette.White, Transparency = 0.15, Duration = 0.6 },
 		},
 	},
+}
+
+-- Anime impact frames: a few frames of stark black/white (ImpactFrame.lua).
+-- Set Enabled = false for players sensitive to flashing.
+local WHITE_TINT = Color3.new(1, 1, 1)
+Config.ImpactFrame = {
+	Enabled = true,
+	EffectName = "GrimoireImpactFrame",
+	GuiName = "GrimoireImpactFrames",
+	DisplayOrder = 60,
+	Presets = {
+		Medium = impact({
+			MaxDistance = 140,
+			Frames = {
+				{ Duration = 0.045, Saturation = -1, Contrast = 1, Brightness = 0.35, TintColor = WHITE_TINT },
+				{ Duration = 0.045, Saturation = -1, Contrast = 1, Brightness = -0.45, TintColor = WHITE_TINT },
+			},
+		}),
+		Heavy = impact({
+			MaxDistance = 220,
+			Frames = {
+				{
+					Duration = 0.04,
+					Saturation = -1,
+					Contrast = 1,
+					Brightness = 0.5,
+					TintColor = WHITE_TINT,
+					Overlay = Palette.White,
+					OverlayTransparency = 0.3,
+				},
+				{ Duration = 0.05, Saturation = -1, Contrast = 1, Brightness = -0.55, TintColor = WHITE_TINT },
+				{ Duration = 0.04, Saturation = -1, Contrast = 1, Brightness = 0.4, TintColor = WHITE_TINT },
+				{ Duration = 0.06, Saturation = -0.6, Contrast = 0.6, Brightness = -0.2, TintColor = WHITE_TINT },
+			},
+		}),
+		Ultimate = impact({
+			MaxDistance = 400,
+			Frames = {
+				{
+					Duration = 0.05,
+					Saturation = -1,
+					Contrast = 1,
+					Brightness = 0.6,
+					TintColor = WHITE_TINT,
+					Overlay = Palette.White,
+					OverlayTransparency = 0.1,
+				},
+				{
+					Duration = 0.06,
+					Saturation = -1,
+					Contrast = 1,
+					Brightness = -0.7,
+					TintColor = WHITE_TINT,
+					Overlay = Palette.Black,
+					OverlayTransparency = 0.35,
+				},
+				{ Duration = 0.05, Saturation = -1, Contrast = 1, Brightness = 0.5, TintColor = WHITE_TINT },
+				{ Duration = 0.06, Saturation = -1, Contrast = 1, Brightness = -0.5, TintColor = WHITE_TINT },
+				{ Duration = 0.08, Saturation = -0.7, Contrast = 0.7, Brightness = 0.1, TintColor = WHITE_TINT },
+			},
+		}),
+	},
+}
+
+Config.FocusLines = {
+	GuiName = "GrimoireFocusLines",
+	DisplayOrder = 55,
+	MaxDistance = 260, -- no focus lines for impacts further away than this
+	TaperPeak = 0.25, -- lines are brightest a quarter of the way out
+	ThinScale = 0.35, -- thinnest line relative to Thickness
+}
+
+Config.RockRing = {
+	BuryDepth = 1.1, -- rocks start this many of their own heights underground
+	ExposedHeight = 0.15, -- how much of a rock's height sits above ground
+	SinkTransparency = 0.4,
+	AspectMin = 0.7, -- per-axis size variation so rocks aren't cubes
+	AspectMax = 1.3,
+	AngleJitter = 0.12, -- radians
 }
 
 Config.GroundDecal = {
@@ -347,7 +469,7 @@ Config.Spells = {
 			HandNames = { "RightHand", "Right Arm" },
 			BookOffset = Vector3.new(0, 1.6, -0.6), -- above the open hand (character space)
 			FallbackOffset = Vector3.new(1.2, 1.2, -1.8), -- used when no hand is found
-			PageCount = 10,
+			PageCount = 16,
 			PageSize = Vector3.new(1.3, 0.04, 1.7),
 			PageColor = Palette.Ink,
 			PageMaterial = Enum.Material.SmoothPlastic,
@@ -414,7 +536,7 @@ Config.Spells = {
 			OpenTime = 0.3,
 			OpenFlash = "Small", -- Config.Flash.Presets key
 			OpenSparks = 30,
-			GlyphCount = 8,
+			GlyphCount = 12,
 			GlyphRadius = 4,
 			GlyphHeight = -0.2, -- relative to HumanoidRootPart (≈ waist)
 			GlyphSize = Vector3.new(0.9, 0.9, 0.05),
@@ -442,6 +564,110 @@ Config.Spells = {
 			IdleBobAmplitude = 0.12,
 			IdleBobSpeed = 2.4,
 			FadeTime = 0.6,
+			-- Boss-tier layers --------------------------------------------
+			GlyphWeb = { -- white arcs jumping between neighbouring glyphs
+				Interval = 0.1,
+				Bolt = bolt({
+					Segments = 5,
+					Amplitude = 0.35,
+					Width = 0.09,
+					EndWidthScale = 0.5,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.04,
+					Duration = 0.14,
+					FadeTime = 0.06,
+				}),
+			},
+			InkStorm = { -- ink wisps swirling up around the caster during the glyph phase
+				Spec = spec({
+					Texture = Config.Textures.InkWisp,
+					Color = cs(Palette.Black, Palette.Ink),
+					Size = ns(0, 0.6, 0.4, 2.2, 1, 0),
+					Transparency = ns(0, 1, 0.2, 0.15, 1, 1),
+					Lifetime = nr(0.8, 1.3),
+					Speed = nr(3, 6),
+					SpreadAngle = Vector2.new(20, 20),
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+					LightInfluence = 0,
+					Rotation = nr(0, 360),
+					RotSpeed = nr(-220, 220),
+					Acceleration = Vector3.new(0, 5, 0),
+					Shape = Enum.ParticleEmitterShape.Cylinder,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+					Flipbook = true,
+				}),
+				Count = 5,
+				Interval = 0.05,
+				Radius = 4.5,
+				Height = 1,
+			},
+			RisingRunes = { -- white motes drifting up out of the glyph ring
+				Spec = spec({
+					Texture = Config.Textures.Spark,
+					Color = cs(Palette.White),
+					Size = ns(0, 0.35, 1, 0),
+					Transparency = ns(0, 0, 0.8, 0.2, 1, 1),
+					Lifetime = nr(0.8, 1.4),
+					Speed = nr(4, 9),
+					SpreadAngle = Vector2.new(10, 10),
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					LightInfluence = 0,
+					Drag = 1,
+					Shape = Enum.ParticleEmitterShape.Cylinder,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+				}),
+				Count = 4,
+				Interval = 0.05,
+			},
+			OpenSpheres = {
+				sphere({
+					StartSize = 1,
+					EndSize = 9,
+					Duration = 0.4,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.15,
+				}),
+				sphere({
+					StartSize = 2,
+					EndSize = 16,
+					Duration = 0.6,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.04,
+				}),
+			},
+			OpenRing = ring({
+				StartRadius = 1,
+				EndRadius = 12,
+				Duration = 0.4,
+				Segments = 28,
+				Width = 0.6,
+				Color = Palette.White,
+				LightEmission = 1,
+				Brightness = LIGHT_BRIGHTNESS,
+			}),
+			OpenFocus = focus({
+				Count = 26,
+				InnerRadius = 0.1,
+				LengthMin = 0.2,
+				LengthMax = 0.5,
+				Thickness = 3,
+				Color = Palette.White,
+				Transparency = 0.2,
+				Duration = 0.3,
+				RerollInterval = 0.05,
+			}),
+			OpenImpact = "Medium", -- Config.ImpactFrame.Presets
+			OpenPunch = "Small", -- Config.CameraShake.Punches
+			OpenShake = "Light",
 		},
 	},
 
@@ -478,7 +704,7 @@ Config.Spells = {
 				Count = 60,
 			},
 			Tendrils = {
-				Count = 7,
+				Count = 12,
 				Bolt = bolt({
 					Segments = 8,
 					Amplitude = 1.4,
@@ -514,7 +740,7 @@ Config.Spells = {
 			},
 			CoreCount = 2,
 			Crackle = {
-				Count = 6,
+				Count = 10,
 				Radius = 3.5,
 				Duration = 0.55,
 				Bolt = bolt({
@@ -531,7 +757,7 @@ Config.Spells = {
 				}),
 			},
 			Arcs = {
-				Count = 6,
+				Count = 10,
 				Ring = ring({
 					StartRadius = 2,
 					EndRadius = 18,
@@ -575,7 +801,7 @@ Config.Spells = {
 				},
 			}),
 			Shards = shards({
-				Count = 16,
+				Count = 30,
 				SizeMin = 0.25,
 				SizeMax = 0.7,
 				StartRadius = 8,
@@ -593,6 +819,104 @@ Config.Spells = {
 				Material = Enum.Material.SmoothPlastic,
 			}),
 			Shake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			Spheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 18,
+					Duration = 0.4,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.05,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 32,
+					Duration = 0.7,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+				sphere({
+					StartSize = 6,
+					EndSize = 44,
+					Duration = 0.9,
+					Color = Palette.White,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0.2,
+					Delay = 0.14,
+				}),
+			},
+			Rocks = rocks({
+				Count = 18,
+				Radius = 10,
+				SizeMin = 1.6,
+				SizeMax = 3.6,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1.5,
+				Stagger = 0.008,
+				RiseTime = 0.25,
+				Hold = 1.6,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			Focus = focus({
+				Count = 42,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.7,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.4,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Heavy",
+			Punch = "Heavy",
+			Aftershock = {
+				Delay = 0.35,
+				Ring = ring({
+					StartRadius = 3,
+					EndRadius = 34,
+					Duration = 0.6,
+					Segments = 40,
+					Width = 2.6,
+					Color = Palette.Black,
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+				}),
+				Smoke = { Spec = Emitters.InkSmoke, Count = 40 },
+				Shake = "Light",
+			},
+			LingerSmoke = {
+				Spec = spec({
+					Texture = Config.Textures.Smoke,
+					Color = cs(Palette.Black, Palette.Smoke),
+					Size = ns(0, 4, 1, 10),
+					Transparency = ns(0, 1, 0.2, 0.35, 1, 1),
+					Lifetime = nr(1.6, 2.4),
+					Speed = nr(1, 3),
+					SpreadAngle = Vector2.new(180, 30),
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+					LightInfluence = 0,
+					Rotation = nr(0, 360),
+					RotSpeed = nr(-20, 20),
+					Acceleration = Vector3.new(0, 1.5, 0),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+					Flipbook = true,
+					LargeFlipbook = true,
+				}),
+				Count = 3,
+				Interval = 0.1,
+				Duration = 2,
+				Radius = 9,
+			},
 		},
 	},
 
@@ -666,7 +990,7 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS,
 			},
 			Shards = {
-				Count = 8,
+				Count = 14,
 				Size = Vector3.new(0.25, 0.5, 0.25),
 				Color = Palette.Ink,
 				Material = Enum.Material.SmoothPlastic,
@@ -710,6 +1034,151 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS,
 			}),
 			StopShake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			ChargeRocks = rocks({
+				Count = 12,
+				Radius = 5,
+				SizeMin = 0.9,
+				SizeMax = 2,
+				TiltMin = 10,
+				TiltMax = 30,
+				RadiusJitter = 0.8,
+				Stagger = 0.02,
+				RiseTime = 0.3,
+				Hold = 1.4,
+				SinkTime = 0.5,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			ChargeSphere = sphere({
+				StartSize = 2,
+				EndSize = 16,
+				Duration = 0.6,
+				Color = Palette.Black,
+				Material = Enum.Material.ForceField,
+				StartTransparency = 0,
+			}),
+			ChargeShake = "Light",
+			InkPillar = { -- looping column of ink wisps shooting up from the feet
+				Spec = spec({
+					Texture = Config.Textures.InkWisp,
+					Color = cs(Palette.Black),
+					Size = ns(0, 1.2, 0.5, 2, 1, 0),
+					Transparency = ns(0, 0.6, 0.3, 0.2, 1, 1),
+					Lifetime = nr(0.6, 1),
+					Speed = nr(10, 16),
+					SpreadAngle = Vector2.new(6, 6),
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+					LightInfluence = 0,
+					Rotation = nr(0, 360),
+					RotSpeed = nr(-120, 120),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+					Rate = 30,
+					Flipbook = true,
+				}),
+			},
+			RisingSparks = {
+				Spec = spec({
+					Texture = Config.Textures.Spark,
+					Color = cs(Palette.White),
+					Size = ns(0, 0.3, 1, 0),
+					Transparency = ns(0, 0, 1, 1),
+					Lifetime = nr(0.5, 0.9),
+					Speed = nr(6, 12),
+					SpreadAngle = Vector2.new(15, 15),
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					LightInfluence = 0,
+					Orientation = Enum.ParticleOrientation.VelocityParallel,
+					Squash = ns(0, 2, 1, 1),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+					EmissionDirection = Enum.NormalId.Top,
+					Rate = 18,
+				}),
+			},
+			ArcPulse = { -- electricity crackling over the body
+				Interval = 0.3,
+				Count = 2,
+				Radius = 3.2,
+				Bolt = bolt({
+					Segments = 6,
+					Amplitude = 0.6,
+					Width = 0.12,
+					EndWidthScale = 0.3,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.04,
+					Duration = 0.16,
+					FadeTime = 0.06,
+				}),
+			},
+			GroundPulse = { -- a thin white ring every Interval seconds
+				Interval = 1.1,
+				Ring = ring({
+					StartRadius = 2,
+					EndRadius = 12,
+					Duration = 0.7,
+					Segments = 28,
+					Width = 0.4,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS * 0.6,
+				}),
+			},
+			StopSpheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 22,
+					Duration = 0.45,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.05,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 34,
+					Duration = 0.75,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+			},
+			StopRocks = rocks({
+				Count = 16,
+				Radius = 8,
+				SizeMin = 1.4,
+				SizeMax = 3,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1.2,
+				Stagger = 0.008,
+				RiseTime = 0.25,
+				Hold = 1.4,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			StopFocus = focus({
+				Count = 40,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.7,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.4,
+				RerollInterval = 0.04,
+			}),
+			StopImpact = "Heavy",
+			StopPunch = "Heavy",
 		},
 	},
 
@@ -776,7 +1245,7 @@ Config.Spells = {
 				Duration = 0.45,
 				FadeTime = 0.2,
 				Branches = {
-					Count = 4,
+					Count = 7,
 					LengthScale = 0.3,
 					Segments = 5,
 					Amplitude = 1.5,
@@ -798,7 +1267,7 @@ Config.Spells = {
 			}),
 			Flash = "Large",
 			GroundArcs = {
-				Count = 7,
+				Count = 11,
 				Length = 14,
 				CrawlTime = 0.6, -- arcs crawl for this long; Bolt.Duration controls lifetime
 				Bolt = bolt({
@@ -834,7 +1303,7 @@ Config.Spells = {
 				},
 			}),
 			BounceSparks = {
-				Count = 14,
+				Count = 24,
 				Size = Vector3.new(0.15, 0.15, 0.15),
 				Color = Palette.White,
 				Material = Enum.Material.Neon,
@@ -853,6 +1322,84 @@ Config.Spells = {
 			Sparks = { Spec = Emitters.WhiteSparks, Count = 50 },
 			Smoke = { Spec = Emitters.InkSmoke, Count = 20 },
 			Shake = "Heavy",
+			-- Boss-tier layers --------------------------------------------
+			PreStrikes = { -- smaller bolts that hit around the target before the big one
+				Count = 2,
+				Interval = 0.2,
+				Scatter = 10,
+				WidthScale = 0.5,
+				Flash = "Small",
+				Sparks = { Spec = Emitters.WhiteSparks, Count = 20 },
+			},
+			Spheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 16,
+					Duration = 0.35,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 28,
+					Duration = 0.65,
+					Color = Palette.Glow,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0.1,
+					Delay = 0.04,
+				}),
+			},
+			Rocks = rocks({
+				Count = 16,
+				Radius = 7,
+				SizeMin = 1.4,
+				SizeMax = 3.2,
+				TiltMin = 25,
+				TiltMax = 50,
+				RadiusJitter = 1.2,
+				Stagger = 0.006,
+				RiseTime = 0.22,
+				Hold = 1.5,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			Focus = focus({
+				Count = 44,
+				InnerRadius = 0.06,
+				LengthMin = 0.3,
+				LengthMax = 0.75,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.05,
+				Duration = 0.4,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Heavy",
+			Punch = "Heavy",
+			Residual = { -- static electricity lingering on the scorched ground
+				Duration = 2.4,
+				Interval = 0.22,
+				Count = 2,
+				Radius = 7,
+				ArcLengthMin = 1, -- studs
+				ArcLengthMax = 3.5,
+				AngleWander = 1, -- radians each arc may turn from the radial direction
+				Bolt = bolt({
+					Segments = 5,
+					Amplitude = 0.5,
+					Width = 0.12,
+					EndWidthScale = 0.2,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.04,
+					Duration = 0.12,
+					FadeTime = 0.06,
+				}),
+			},
 		},
 	},
 
@@ -869,7 +1416,7 @@ Config.Spells = {
 				InnerRadiusScale = 0.78,
 				StarPoints = 5,
 				StarStep = 2,
-				Ticks = 16,
+				Ticks = 24,
 				TickLength = 0.8,
 				Width = 0.22,
 				Color = Palette.White,
@@ -1029,6 +1576,93 @@ Config.Spells = {
 				},
 			}),
 			Shake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			FireRing = { -- crimson flames licking up along the seal's edge
+				Spec = spec({
+					Texture = Config.Textures.Fire,
+					Color = cs(Palette.CrimsonBright, Palette.Crimson),
+					Size = ns(0, 1.6, 0.6, 1.2, 1, 0),
+					Transparency = ns(0, 0.2, 0.7, 0.4, 1, 1),
+					Lifetime = nr(0.4, 0.7),
+					Speed = nr(6, 12),
+					SpreadAngle = Vector2.new(8, 8),
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS * 0.6,
+					LightInfluence = 0,
+					Squash = ns(0, 0.5, 1, 1),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+					Flipbook = true,
+					LargeFlipbook = true,
+				}),
+				Count = 6,
+				Interval = 0.04,
+			},
+			Spirals = { -- flame ribbons coiling up the pillar
+				Count = 3,
+				Radius = 5,
+				Speed = 6,
+				RiseSpeed = 26,
+				Width = 1.2,
+				Lifetime = 0.5,
+				Color = Palette.CrimsonBright,
+				Transparency = ns(0, 0, 1, 1),
+				LightEmission = 1,
+				Brightness = LIGHT_BRIGHTNESS,
+				InkWidth = 1.8, -- matching black ribbons, offset by half a turn
+				InkBrightness = DARK_BRIGHTNESS,
+			},
+			EruptRocks = rocks({
+				Count = 14,
+				Radius = 6,
+				SizeMin = 1.4,
+				SizeMax = 3,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1,
+				Stagger = 0.01,
+				RiseTime = 0.25,
+				Hold = 2,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Basalt,
+			}),
+			EruptPunch = "Medium",
+			EruptShake = "Medium",
+			EndSpheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 18,
+					Duration = 0.4,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 30,
+					Duration = 0.7,
+					Color = Palette.CrimsonBright,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+			},
+			EndFocus = focus({
+				Count = 36,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.65,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.35,
+				RerollInterval = 0.04,
+			}),
+			EndImpact = "Heavy",
+			EndPunch = "Heavy",
 		},
 	},
 
@@ -1149,7 +1783,7 @@ Config.Spells = {
 				},
 			}),
 			Fragments = shards({
-				Count = 5, -- per spike
+				Count = 8, -- per spike
 				SizeMin = 0.2,
 				SizeMax = 0.5,
 				StartRadius = 0.6,
@@ -1169,6 +1803,100 @@ Config.Spells = {
 			ShatterSnow = 10, -- snow particles per shattered spike
 			Shake = "Light",
 			ImpactShake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			Cluster = { -- giant crystals erupting in a crown at the target
+				Count = 9,
+				HeightMin = 9,
+				HeightMax = 18,
+				WidthMin = 1.8,
+				WidthMax = 3.2,
+				TiltMin = 15, -- degrees leaning outward
+				TiltMax = 50,
+				Radius = 2.5,
+				AngleJitter = 0.3, -- radians
+				GrowTime = 0.18,
+				Stagger = 0.02,
+			},
+			IceRocks = rocks({
+				Count = 18,
+				Radius = 8,
+				SizeMin = 1.4,
+				SizeMax = 3,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1.4,
+				Stagger = 0.008,
+				RiseTime = 0.22,
+				Hold = 1.4,
+				SinkTime = 0.6,
+				UseGroundMaterial = false,
+				Color = Palette.Ice,
+				Material = Enum.Material.Ice,
+			}),
+			Spheres = {
+				sphere({
+					StartSize = 1,
+					EndSize = 14,
+					Duration = 0.35,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.1,
+				}),
+				sphere({
+					StartSize = 3,
+					EndSize = 28,
+					Duration = 0.7,
+					Color = Palette.PaleCyan,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+			},
+			Blizzard = { -- swirling snow storm around the impact
+				Spec = spec({
+					Texture = Config.Textures.Snow,
+					Color = cs(Palette.White, Palette.PaleCyan),
+					Size = ns(0, 0.4, 1, 0),
+					Transparency = ns(0, 0, 0.8, 0.3, 1, 1),
+					Lifetime = nr(1, 1.6),
+					Speed = nr(8, 16),
+					SpreadAngle = Vector2.new(180, 30),
+					LightEmission = 1,
+					Brightness = 3,
+					LightInfluence = 0,
+					Drag = 1,
+					Acceleration = Vector3.new(0, -2, 0),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+				}),
+				Count = 10,
+				Interval = 0.06,
+				Duration = 1.6,
+				Radius = 10,
+			},
+			Focus = focus({
+				Count = 34,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.65,
+				Thickness = 3,
+				Color = Palette.White,
+				Transparency = 0.15,
+				Duration = 0.35,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Medium",
+			Punch = "Medium",
+			ShatterRing = ring({
+				StartRadius = 2,
+				EndRadius = 22,
+				Duration = 0.5,
+				Segments = 32,
+				Width = 0.8,
+				Color = Palette.PaleCyan,
+				LightEmission = 1,
+				Brightness = LIGHT_BRIGHTNESS,
+			}),
 		},
 	},
 
@@ -1245,7 +1973,7 @@ Config.Spells = {
 				Count = 2,
 			},
 			Spirals = {
-				Count = 2,
+				Count = 3,
 				Radius = 1.6,
 				Speed = 24, -- rad/s around the travel axis
 				Width = 0.18,
@@ -1256,7 +1984,7 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS,
 			},
 			Split = {
-				Count = 4,
+				Count = 6,
 				Scale = 0.4,
 				Distance = 14,
 				Duration = 0.3,
@@ -1284,7 +2012,7 @@ Config.Spells = {
 				Count = 25,
 			},
 			Shards = shards({
-				Count = 10,
+				Count = 18,
 				SizeMin = 0.2,
 				SizeMax = 0.55,
 				StartRadius = 4,
@@ -1321,6 +2049,62 @@ Config.Spells = {
 				},
 			}),
 			Shake = "Light",
+			-- Boss-tier layers --------------------------------------------
+			Slashes = { -- three crescents fired in quick succession
+				Count = 3,
+				Interval = 0.11,
+				Rolls = { 12, -24, 38 }, -- degrees; one entry per slash (cycled)
+				SideOffset = 2.5, -- studs between the slashes' paths
+			},
+			PathRocks = rocks({
+				Count = 0, -- unused for lines; Spacing decides the count
+				Spacing = 3,
+				Radius = 2.6, -- distance either side of the slash line
+				SizeMin = 1,
+				SizeMax = 2.2,
+				TiltMin = 25,
+				TiltMax = 55,
+				RadiusJitter = 0.6,
+				Stagger = 0.012,
+				RiseTime = 0.2,
+				Hold = 1.4,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			Spheres = {
+				sphere({
+					StartSize = 1,
+					EndSize = 12,
+					Duration = 0.3,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.1,
+				}),
+				sphere({
+					StartSize = 2,
+					EndSize = 22,
+					Duration = 0.55,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.04,
+				}),
+			},
+			Focus = focus({
+				Count = 36,
+				InnerRadius = 0.08,
+				LengthMin = 0.3,
+				LengthMax = 0.7,
+				Thickness = 3,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.3,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Medium",
+			Punch = "Medium",
 		},
 	},
 
@@ -1370,7 +2154,7 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS * 2,
 			},
 			PillarBolts = {
-				Count = 6,
+				Count = 10,
 				Radius = 6,
 				Bolt = bolt({
 					Segments = 16,
@@ -1410,7 +2194,7 @@ Config.Spells = {
 				Radius = 11,
 			},
 			InkTrails = {
-				Count = 4,
+				Count = 6,
 				Radius = 10,
 				Speed = 5, -- rad/s
 				RiseSpeed = 40, -- studs/s
@@ -1468,7 +2252,7 @@ Config.Spells = {
 				},
 			}),
 			Shards = shards({
-				Count = 40,
+				Count = 70,
 				SizeMin = 0.3,
 				SizeMax = 1.2,
 				StartRadius = 20,
@@ -1486,6 +2270,134 @@ Config.Spells = {
 				Material = Enum.Material.SmoothPlastic,
 			}),
 			Shake = "Ultimate",
+			-- Boss-tier layers --------------------------------------------
+			ChargeArcs = { -- lightning crawling over the rune circle while it charges
+				Count = 5,
+				Radius = 20,
+				Span = 1, -- radians each arc may stretch around the circle
+				Bolt = bolt({
+					Segments = 8,
+					Amplitude = 2,
+					Width = 0.35,
+					EndWidthScale = 0.3,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.05,
+					Duration = 1.4,
+					FadeTime = 0.2,
+				}),
+			},
+			ChargeFocus = focus({ -- focus lines toward the circle as it finishes charging
+				Count = 30,
+				InnerRadius = 0.12,
+				LengthMin = 0.2,
+				LengthMax = 0.5,
+				Thickness = 2,
+				Color = Palette.White,
+				Transparency = 0.35,
+				Duration = 0.5,
+				RerollInterval = 0.05,
+			}),
+			Spears = { -- smaller light pillars slamming down around the main one
+				Count = 8,
+				Radius = 18,
+				AngleJitter = 0.2, -- radians
+				Delay = 0.2, -- after the main impact
+				Interval = 0.06,
+				Height = 50,
+				CoreWidth = 2.4,
+				GlowWidth = 6,
+				GlowTransparency = 0.55,
+				CrashTime = 0.08,
+				Duration = 0.45,
+				FadeTime = 0.3,
+				Flash = "Small",
+				Ring = ring({
+					StartRadius = 1,
+					EndRadius = 9,
+					Duration = 0.35,
+					Segments = 20,
+					Width = 0.8,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+				}),
+			},
+			Spheres = {
+				sphere({
+					StartSize = 4,
+					EndSize = 40,
+					Duration = 0.5,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0,
+				}),
+				sphere({
+					StartSize = 8,
+					EndSize = 70,
+					Duration = 1,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.08,
+				}),
+				sphere({
+					StartSize = 10,
+					EndSize = 95,
+					Duration = 1.3,
+					Color = Palette.White,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0.2,
+					Delay = 0.2,
+				}),
+			},
+			Rocks = rocks({
+				Count = 28,
+				Radius = 16,
+				SizeMin = 3,
+				SizeMax = 6.5,
+				TiltMin = 25,
+				TiltMax = 55,
+				RadiusJitter = 2.5,
+				Stagger = 0.006,
+				RiseTime = 0.3,
+				Hold = 2.6,
+				SinkTime = 0.8,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			OuterRocks = rocks({
+				Count = 36,
+				Radius = 28,
+				SizeMin = 2,
+				SizeMax = 4.5,
+				TiltMin = 15,
+				TiltMax = 40,
+				RadiusJitter = 3,
+				Stagger = 0.006,
+				RiseTime = 0.3,
+				Hold = 2.4,
+				SinkTime = 0.8,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			OuterRocksDelay = 0.12,
+			Focus = focus({
+				Count = 64,
+				InnerRadius = 0.05,
+				LengthMin = 0.3,
+				LengthMax = 0.85,
+				Thickness = 5,
+				Color = Palette.White,
+				Transparency = 0,
+				Duration = 0.55,
+				RerollInterval = 0.035,
+			}),
+			Impact = "Ultimate",
+			Punch = "Ultimate",
 		},
 	},
 }
