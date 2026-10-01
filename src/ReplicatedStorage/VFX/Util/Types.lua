@@ -32,8 +32,10 @@ export type EmitterSpec = {
 	EmissionDirection: Enum.NormalId?,
 	LockedToPart: boolean?,
 	Rate: number?, -- set only for looping emitters; bursts use :Emit()
-	Flipbook: boolean?, -- apply Config.Flipbook settings
-	LargeFlipbook: boolean?, -- use the 8x8 layout instead of 4x4
+	-- Documentation only: the flipbook grid now comes from the texture itself
+	-- (Config.TextureLayouts), so these just mark specs meant to animate.
+	Flipbook: boolean?,
+	LargeFlipbook: boolean?,
 }
 
 export type BurstSpec = {

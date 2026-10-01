@@ -103,6 +103,21 @@ function Emit.attachment(parent: BasePart, offset: CFrame?): Attachment
 	return attachment
 end
 
+-- Flipbook grid for an uploaded texture from the pack, or nil for single
+-- images and for the built-in rbxasset:// placeholders (those are not
+-- flipbooks, so slicing them into tiles would look broken).
+function Emit.flipbookLayout(texture: string): Enum.ParticleFlipbookLayout?
+	if string.sub(texture, 1, 13) ~= "rbxassetid://" or texture == Config.PlaceholderTexture then
+		return nil
+	end
+	for key, layout in Config.TextureLayouts :: { [string]: Enum.ParticleFlipbookLayout } do
+		if (Config.Textures :: any)[key] == texture then
+			return layout
+		end
+	end
+	return nil
+end
+
 -- Builds a ParticleEmitter from a spec. Burst emitters stay disabled with
 -- Rate 0 and are fired with :Emit(n); looping emitters set spec.Rate.
 function Emit.emitter(parent: Instance, spec: Types.EmitterSpec): ParticleEmitter
@@ -141,8 +156,9 @@ function Emit.emitter(parent: Instance, spec: Types.EmitterSpec): ParticleEmitte
 	if spec.EmissionDirection then
 		emitter.EmissionDirection = spec.EmissionDirection
 	end
-	if spec.Flipbook and Config.Flipbook.Enabled then
-		emitter.FlipbookLayout = if spec.LargeFlipbook then Config.Flipbook.LargeLayout else Config.Flipbook.Layout
+	local layout = Emit.flipbookLayout(spec.Texture)
+	if layout and Config.Flipbook.Enabled then
+		emitter.FlipbookLayout = layout
 		emitter.FlipbookMode = Config.Flipbook.Mode
 		emitter.FlipbookFramerate = Config.Flipbook.Framerate
 		emitter.FlipbookStartRandom = Config.Flipbook.StartRandom
