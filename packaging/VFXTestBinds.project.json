@@ -1,0 +1,4 @@
+{
+  "name": "VFXTestBinds",
+  "tree": { "$path": "../src/StarterPlayer/StarterPlayerScripts/VFXTestBinds.client.lua" }
+}

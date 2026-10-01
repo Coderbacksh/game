@@ -1,0 +1,4 @@
+{
+  "name": "SpellClient",
+  "tree": { "$path": "../src/StarterPlayer/StarterPlayerScripts/SpellClient.client.lua" }
+}
