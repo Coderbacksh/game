@@ -1,0 +1,4 @@
+{
+  "name": "SpellService",
+  "tree": { "$path": "../src/ServerScriptService/SpellService.lua" }
+}

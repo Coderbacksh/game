@@ -13,6 +13,7 @@ OUT = os.path.join(ROOT, "dist", "InstallGrimoireVFX.lua")
 # (source path, Roblox service, path inside the service)
 TARGETS = [
     ("src/ReplicatedStorage/VFX", "ReplicatedStorage", []),
+    ("src/ServerScriptService/SpellService.lua", "ServerScriptService", []),
     ("src/ServerScriptService/SpellServer.server.lua", "ServerScriptService", []),
     ("src/StarterPlayer/StarterPlayerScripts/SpellClient.client.lua", "StarterPlayer", ["StarterPlayerScripts"]),
     ("src/StarterPlayer/StarterPlayerScripts/VFXTestBinds.client.lua", "StarterPlayer", ["StarterPlayerScripts"]),
@@ -62,6 +63,7 @@ def main():
         "",
         "\tIt creates:",
         "\t  ReplicatedStorage.VFX                         (Config, Util, Spells, VFXController)",
+        "\t  ServerScriptService.SpellService              (ModuleScript, spell API + boss casts)",
         "\t  ServerScriptService.SpellServer               (Script)",
         "\t  StarterPlayer.StarterPlayerScripts.SpellClient   (LocalScript)",
         "\t  StarterPlayer.StarterPlayerScripts.VFXTestBinds  (LocalScript, debug keys 1-8)",
@@ -87,6 +89,9 @@ def main():
         "local conflicts = {}",
         'if ReplicatedStorage:FindFirstChild("VFX") then',
         '\ttable.insert(conflicts, "ReplicatedStorage.VFX")',
+        'end',
+        'if ServerScriptService:FindFirstChild("SpellService") then',
+        '\ttable.insert(conflicts, "ServerScriptService.SpellService")',
         'end',
         'if ServerScriptService:FindFirstChild("SpellServer") then',
         '\ttable.insert(conflicts, "ServerScriptService.SpellServer")',

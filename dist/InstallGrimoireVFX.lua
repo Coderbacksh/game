@@ -6,6 +6,7 @@
 
 	It creates:
 	  ReplicatedStorage.VFX                         (Config, Util, Spells, VFXController)
+	  ServerScriptService.SpellService              (ModuleScript, spell API + boss casts)
 	  ServerScriptService.SpellServer               (Script)
 	  StarterPlayer.StarterPlayerScripts.SpellClient   (LocalScript)
 	  StarterPlayer.StarterPlayerScripts.VFXTestBinds  (LocalScript, debug keys 1-8)
@@ -31,6 +32,9 @@ local StarterPlayerScripts = game:GetService("StarterPlayer"):WaitForChild("Star
 local conflicts = {}
 if ReplicatedStorage:FindFirstChild("VFX") then
 	table.insert(conflicts, "ReplicatedStorage.VFX")
+end
+if ServerScriptService:FindFirstChild("SpellService") then
+	table.insert(conflicts, "ServerScriptService.SpellService")
 end
 if ServerScriptService:FindFirstChild("SpellServer") then
 	table.insert(conflicts, "ServerScriptService.SpellServer")
@@ -68,6 +72,15 @@ local Config = {}
 -- Master debug switch. When false the VFXTestBinds script does nothing
 -- (no key binds, no on-screen label). Ship with this set to false.
 Config.DEBUG = true
+
+-- Global intensity. Particles multiplies every burst count and emitter
+-- Rate (2 = twice as many particles). MaxPerBurst caps any single :Emit()
+-- so a world-boss cast can't freeze low-end phones. Lower Particles to
+-- ~0.6 if mobile players struggle.
+Config.Intensity = {
+	Particles = 1.6,
+	MaxPerBurst = 400,
+}
 
 ---------------------------------------------------------------------------
 -- Helpers used only to build the tables below (keeps the data readable).
@@ -113,6 +126,18 @@ local function rune(t: Types.RuneCircleParams): Types.RuneCircleParams
 	return t
 end
 local function orbit(t: Types.OrbitParams): Types.OrbitParams
+	return t
+end
+local function rocks(t: Types.RockParams): Types.RockParams
+	return t
+end
+local function sphere(t: Types.SphereParams): Types.SphereParams
+	return t
+end
+local function focus(t: Types.FocusLineParams): Types.FocusLineParams
+	return t
+end
+local function impact(t: Types.ImpactFrameParams): Types.ImpactFrameParams
 	return t
 end
 
@@ -204,6 +229,18 @@ Config.Network = {
 	GlobalCastInterval = 0.15, -- seconds between ANY two casts per player (anti-spam)
 }
 
+-- World boss. Your boss AI casts with SpellService.CastFromModel (server).
+-- The Debug* values only matter when DEBUG = true: a test boss spawns and
+-- Shift + 1-8 makes it cast at you.
+Config.Boss = {
+	DebugName = "GrimoireTestBoss",
+	DebugScale = 3, -- Model:ScaleTo factor (3 = three times player size)
+	DebugPosition = Vector3.new(0, 12, -45),
+	DebugColor = Color3.fromRGB(12, 12, 16),
+	DebugRemote = "DebugBossCast",
+	DebugCastInterval = 0.4, -- seconds between debug boss casts per player
+}
+
 -- Debug test harness (VFXTestBinds.client.lua). Only active when DEBUG = true.
 Config.TestBinds = {
 	GuiName = "GrimoireVFXTestBinds",
@@ -219,6 +256,7 @@ Config.TestBinds = {
 	BackgroundColor = Color3.fromRGB(8, 8, 10),
 	BackgroundTransparency = 0.35,
 	ActiveSuffix = "  [ON]", -- shown next to looping spells that are running
+	BossHint = "[Shift+key] test boss casts at you",
 }
 
 ---------------------------------------------------------------------------
@@ -229,6 +267,15 @@ Config.CameraShake = {
 	RotationScale = 0.6, -- degrees of rotation per stud of positional shake
 	MinDistance = 15, -- full strength inside this distance
 	MaxDistance = 220, -- no shake beyond this distance
+	MinFov = 30,
+	MaxFov = 110,
+	-- FOV kicks (CameraShake.Punch): degrees added at the peak.
+	Punches = {
+		Small = { FovDelta = 4, InTime = 0.05, OutTime = 0.35 },
+		Medium = { FovDelta = 8, InTime = 0.05, OutTime = 0.5 },
+		Heavy = { FovDelta = 14, InTime = 0.06, OutTime = 0.7 },
+		Ultimate = { FovDelta = 24, InTime = 0.08, OutTime = 1.2 },
+	},
 	Presets = {
 		Light = { Magnitude = 0.25, Frequency = 18, Duration = 0.35 },
 		Medium = { Magnitude = 0.55, Frequency = 20, Duration = 0.5 },
@@ -267,6 +314,85 @@ Config.Flash = {
 			Screen = { Color = Palette.White, Transparency = 0.15, Duration = 0.6 },
 		},
 	},
+}
+
+-- Anime impact frames: a few frames of stark black/white (ImpactFrame.lua).
+-- Set Enabled = false for players sensitive to flashing.
+local WHITE_TINT = Color3.new(1, 1, 1)
+Config.ImpactFrame = {
+	Enabled = true,
+	EffectName = "GrimoireImpactFrame",
+	GuiName = "GrimoireImpactFrames",
+	DisplayOrder = 60,
+	Presets = {
+		Medium = impact({
+			MaxDistance = 140,
+			Frames = {
+				{ Duration = 0.045, Saturation = -1, Contrast = 1, Brightness = 0.35, TintColor = WHITE_TINT },
+				{ Duration = 0.045, Saturation = -1, Contrast = 1, Brightness = -0.45, TintColor = WHITE_TINT },
+			},
+		}),
+		Heavy = impact({
+			MaxDistance = 220,
+			Frames = {
+				{
+					Duration = 0.04,
+					Saturation = -1,
+					Contrast = 1,
+					Brightness = 0.5,
+					TintColor = WHITE_TINT,
+					Overlay = Palette.White,
+					OverlayTransparency = 0.3,
+				},
+				{ Duration = 0.05, Saturation = -1, Contrast = 1, Brightness = -0.55, TintColor = WHITE_TINT },
+				{ Duration = 0.04, Saturation = -1, Contrast = 1, Brightness = 0.4, TintColor = WHITE_TINT },
+				{ Duration = 0.06, Saturation = -0.6, Contrast = 0.6, Brightness = -0.2, TintColor = WHITE_TINT },
+			},
+		}),
+		Ultimate = impact({
+			MaxDistance = 400,
+			Frames = {
+				{
+					Duration = 0.05,
+					Saturation = -1,
+					Contrast = 1,
+					Brightness = 0.6,
+					TintColor = WHITE_TINT,
+					Overlay = Palette.White,
+					OverlayTransparency = 0.1,
+				},
+				{
+					Duration = 0.06,
+					Saturation = -1,
+					Contrast = 1,
+					Brightness = -0.7,
+					TintColor = WHITE_TINT,
+					Overlay = Palette.Black,
+					OverlayTransparency = 0.35,
+				},
+				{ Duration = 0.05, Saturation = -1, Contrast = 1, Brightness = 0.5, TintColor = WHITE_TINT },
+				{ Duration = 0.06, Saturation = -1, Contrast = 1, Brightness = -0.5, TintColor = WHITE_TINT },
+				{ Duration = 0.08, Saturation = -0.7, Contrast = 0.7, Brightness = 0.1, TintColor = WHITE_TINT },
+			},
+		}),
+	},
+}
+
+Config.FocusLines = {
+	GuiName = "GrimoireFocusLines",
+	DisplayOrder = 55,
+	MaxDistance = 260, -- no focus lines for impacts further away than this
+	TaperPeak = 0.25, -- lines are brightest a quarter of the way out
+	ThinScale = 0.35, -- thinnest line relative to Thickness
+}
+
+Config.RockRing = {
+	BuryDepth = 1.1, -- rocks start this many of their own heights underground
+	ExposedHeight = 0.15, -- how much of a rock's height sits above ground
+	SinkTransparency = 0.4,
+	AspectMin = 0.7, -- per-axis size variation so rocks aren't cubes
+	AspectMax = 1.3,
+	AngleJitter = 0.12, -- radians
 }
 
 Config.GroundDecal = {
@@ -397,7 +523,7 @@ Config.Spells = {
 			HandNames = { "RightHand", "Right Arm" },
 			BookOffset = Vector3.new(0, 1.6, -0.6), -- above the open hand (character space)
 			FallbackOffset = Vector3.new(1.2, 1.2, -1.8), -- used when no hand is found
-			PageCount = 10,
+			PageCount = 16,
 			PageSize = Vector3.new(1.3, 0.04, 1.7),
 			PageColor = Palette.Ink,
 			PageMaterial = Enum.Material.SmoothPlastic,
@@ -464,7 +590,7 @@ Config.Spells = {
 			OpenTime = 0.3,
 			OpenFlash = "Small", -- Config.Flash.Presets key
 			OpenSparks = 30,
-			GlyphCount = 8,
+			GlyphCount = 12,
 			GlyphRadius = 4,
 			GlyphHeight = -0.2, -- relative to HumanoidRootPart (≈ waist)
 			GlyphSize = Vector3.new(0.9, 0.9, 0.05),
@@ -492,6 +618,110 @@ Config.Spells = {
 			IdleBobAmplitude = 0.12,
 			IdleBobSpeed = 2.4,
 			FadeTime = 0.6,
+			-- Boss-tier layers --------------------------------------------
+			GlyphWeb = { -- white arcs jumping between neighbouring glyphs
+				Interval = 0.1,
+				Bolt = bolt({
+					Segments = 5,
+					Amplitude = 0.35,
+					Width = 0.09,
+					EndWidthScale = 0.5,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.04,
+					Duration = 0.14,
+					FadeTime = 0.06,
+				}),
+			},
+			InkStorm = { -- ink wisps swirling up around the caster during the glyph phase
+				Spec = spec({
+					Texture = Config.Textures.InkWisp,
+					Color = cs(Palette.Black, Palette.Ink),
+					Size = ns(0, 0.6, 0.4, 2.2, 1, 0),
+					Transparency = ns(0, 1, 0.2, 0.15, 1, 1),
+					Lifetime = nr(0.8, 1.3),
+					Speed = nr(3, 6),
+					SpreadAngle = Vector2.new(20, 20),
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+					LightInfluence = 0,
+					Rotation = nr(0, 360),
+					RotSpeed = nr(-220, 220),
+					Acceleration = Vector3.new(0, 5, 0),
+					Shape = Enum.ParticleEmitterShape.Cylinder,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+					Flipbook = true,
+				}),
+				Count = 5,
+				Interval = 0.05,
+				Radius = 4.5,
+				Height = 1,
+			},
+			RisingRunes = { -- white motes drifting up out of the glyph ring
+				Spec = spec({
+					Texture = Config.Textures.Spark,
+					Color = cs(Palette.White),
+					Size = ns(0, 0.35, 1, 0),
+					Transparency = ns(0, 0, 0.8, 0.2, 1, 1),
+					Lifetime = nr(0.8, 1.4),
+					Speed = nr(4, 9),
+					SpreadAngle = Vector2.new(10, 10),
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					LightInfluence = 0,
+					Drag = 1,
+					Shape = Enum.ParticleEmitterShape.Cylinder,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+				}),
+				Count = 4,
+				Interval = 0.05,
+			},
+			OpenSpheres = {
+				sphere({
+					StartSize = 1,
+					EndSize = 9,
+					Duration = 0.4,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.15,
+				}),
+				sphere({
+					StartSize = 2,
+					EndSize = 16,
+					Duration = 0.6,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.04,
+				}),
+			},
+			OpenRing = ring({
+				StartRadius = 1,
+				EndRadius = 12,
+				Duration = 0.4,
+				Segments = 28,
+				Width = 0.6,
+				Color = Palette.White,
+				LightEmission = 1,
+				Brightness = LIGHT_BRIGHTNESS,
+			}),
+			OpenFocus = focus({
+				Count = 26,
+				InnerRadius = 0.1,
+				LengthMin = 0.2,
+				LengthMax = 0.5,
+				Thickness = 3,
+				Color = Palette.White,
+				Transparency = 0.2,
+				Duration = 0.3,
+				RerollInterval = 0.05,
+			}),
+			OpenImpact = "Medium", -- Config.ImpactFrame.Presets
+			OpenPunch = "Small", -- Config.CameraShake.Punches
+			OpenShake = "Light",
 		},
 	},
 
@@ -528,7 +758,7 @@ Config.Spells = {
 				Count = 60,
 			},
 			Tendrils = {
-				Count = 7,
+				Count = 12,
 				Bolt = bolt({
 					Segments = 8,
 					Amplitude = 1.4,
@@ -564,7 +794,7 @@ Config.Spells = {
 			},
 			CoreCount = 2,
 			Crackle = {
-				Count = 6,
+				Count = 10,
 				Radius = 3.5,
 				Duration = 0.55,
 				Bolt = bolt({
@@ -581,7 +811,7 @@ Config.Spells = {
 				}),
 			},
 			Arcs = {
-				Count = 6,
+				Count = 10,
 				Ring = ring({
 					StartRadius = 2,
 					EndRadius = 18,
@@ -625,7 +855,7 @@ Config.Spells = {
 				},
 			}),
 			Shards = shards({
-				Count = 16,
+				Count = 30,
 				SizeMin = 0.25,
 				SizeMax = 0.7,
 				StartRadius = 8,
@@ -643,6 +873,104 @@ Config.Spells = {
 				Material = Enum.Material.SmoothPlastic,
 			}),
 			Shake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			Spheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 18,
+					Duration = 0.4,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.05,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 32,
+					Duration = 0.7,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+				sphere({
+					StartSize = 6,
+					EndSize = 44,
+					Duration = 0.9,
+					Color = Palette.White,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0.2,
+					Delay = 0.14,
+				}),
+			},
+			Rocks = rocks({
+				Count = 18,
+				Radius = 10,
+				SizeMin = 1.6,
+				SizeMax = 3.6,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1.5,
+				Stagger = 0.008,
+				RiseTime = 0.25,
+				Hold = 1.6,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			Focus = focus({
+				Count = 42,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.7,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.4,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Heavy",
+			Punch = "Heavy",
+			Aftershock = {
+				Delay = 0.35,
+				Ring = ring({
+					StartRadius = 3,
+					EndRadius = 34,
+					Duration = 0.6,
+					Segments = 40,
+					Width = 2.6,
+					Color = Palette.Black,
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+				}),
+				Smoke = { Spec = Emitters.InkSmoke, Count = 40 },
+				Shake = "Light",
+			},
+			LingerSmoke = {
+				Spec = spec({
+					Texture = Config.Textures.Smoke,
+					Color = cs(Palette.Black, Palette.Smoke),
+					Size = ns(0, 4, 1, 10),
+					Transparency = ns(0, 1, 0.2, 0.35, 1, 1),
+					Lifetime = nr(1.6, 2.4),
+					Speed = nr(1, 3),
+					SpreadAngle = Vector2.new(180, 30),
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+					LightInfluence = 0,
+					Rotation = nr(0, 360),
+					RotSpeed = nr(-20, 20),
+					Acceleration = Vector3.new(0, 1.5, 0),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+					Flipbook = true,
+					LargeFlipbook = true,
+				}),
+				Count = 3,
+				Interval = 0.1,
+				Duration = 2,
+				Radius = 9,
+			},
 		},
 	},
 
@@ -716,7 +1044,7 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS,
 			},
 			Shards = {
-				Count = 8,
+				Count = 14,
 				Size = Vector3.new(0.25, 0.5, 0.25),
 				Color = Palette.Ink,
 				Material = Enum.Material.SmoothPlastic,
@@ -760,6 +1088,151 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS,
 			}),
 			StopShake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			ChargeRocks = rocks({
+				Count = 12,
+				Radius = 5,
+				SizeMin = 0.9,
+				SizeMax = 2,
+				TiltMin = 10,
+				TiltMax = 30,
+				RadiusJitter = 0.8,
+				Stagger = 0.02,
+				RiseTime = 0.3,
+				Hold = 1.4,
+				SinkTime = 0.5,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			ChargeSphere = sphere({
+				StartSize = 2,
+				EndSize = 16,
+				Duration = 0.6,
+				Color = Palette.Black,
+				Material = Enum.Material.ForceField,
+				StartTransparency = 0,
+			}),
+			ChargeShake = "Light",
+			InkPillar = { -- looping column of ink wisps shooting up from the feet
+				Spec = spec({
+					Texture = Config.Textures.InkWisp,
+					Color = cs(Palette.Black),
+					Size = ns(0, 1.2, 0.5, 2, 1, 0),
+					Transparency = ns(0, 0.6, 0.3, 0.2, 1, 1),
+					Lifetime = nr(0.6, 1),
+					Speed = nr(10, 16),
+					SpreadAngle = Vector2.new(6, 6),
+					LightEmission = 0,
+					Brightness = DARK_BRIGHTNESS,
+					LightInfluence = 0,
+					Rotation = nr(0, 360),
+					RotSpeed = nr(-120, 120),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+					Rate = 30,
+					Flipbook = true,
+				}),
+			},
+			RisingSparks = {
+				Spec = spec({
+					Texture = Config.Textures.Spark,
+					Color = cs(Palette.White),
+					Size = ns(0, 0.3, 1, 0),
+					Transparency = ns(0, 0, 1, 1),
+					Lifetime = nr(0.5, 0.9),
+					Speed = nr(6, 12),
+					SpreadAngle = Vector2.new(15, 15),
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					LightInfluence = 0,
+					Orientation = Enum.ParticleOrientation.VelocityParallel,
+					Squash = ns(0, 2, 1, 1),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+					EmissionDirection = Enum.NormalId.Top,
+					Rate = 18,
+				}),
+			},
+			ArcPulse = { -- electricity crackling over the body
+				Interval = 0.3,
+				Count = 2,
+				Radius = 3.2,
+				Bolt = bolt({
+					Segments = 6,
+					Amplitude = 0.6,
+					Width = 0.12,
+					EndWidthScale = 0.3,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.04,
+					Duration = 0.16,
+					FadeTime = 0.06,
+				}),
+			},
+			GroundPulse = { -- a thin white ring every Interval seconds
+				Interval = 1.1,
+				Ring = ring({
+					StartRadius = 2,
+					EndRadius = 12,
+					Duration = 0.7,
+					Segments = 28,
+					Width = 0.4,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS * 0.6,
+				}),
+			},
+			StopSpheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 22,
+					Duration = 0.45,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.05,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 34,
+					Duration = 0.75,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+			},
+			StopRocks = rocks({
+				Count = 16,
+				Radius = 8,
+				SizeMin = 1.4,
+				SizeMax = 3,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1.2,
+				Stagger = 0.008,
+				RiseTime = 0.25,
+				Hold = 1.4,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			StopFocus = focus({
+				Count = 40,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.7,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.4,
+				RerollInterval = 0.04,
+			}),
+			StopImpact = "Heavy",
+			StopPunch = "Heavy",
 		},
 	},
 
@@ -826,7 +1299,7 @@ Config.Spells = {
 				Duration = 0.45,
 				FadeTime = 0.2,
 				Branches = {
-					Count = 4,
+					Count = 7,
 					LengthScale = 0.3,
 					Segments = 5,
 					Amplitude = 1.5,
@@ -848,7 +1321,7 @@ Config.Spells = {
 			}),
 			Flash = "Large",
 			GroundArcs = {
-				Count = 7,
+				Count = 11,
 				Length = 14,
 				CrawlTime = 0.6, -- arcs crawl for this long; Bolt.Duration controls lifetime
 				Bolt = bolt({
@@ -884,7 +1357,7 @@ Config.Spells = {
 				},
 			}),
 			BounceSparks = {
-				Count = 14,
+				Count = 24,
 				Size = Vector3.new(0.15, 0.15, 0.15),
 				Color = Palette.White,
 				Material = Enum.Material.Neon,
@@ -903,6 +1376,84 @@ Config.Spells = {
 			Sparks = { Spec = Emitters.WhiteSparks, Count = 50 },
 			Smoke = { Spec = Emitters.InkSmoke, Count = 20 },
 			Shake = "Heavy",
+			-- Boss-tier layers --------------------------------------------
+			PreStrikes = { -- smaller bolts that hit around the target before the big one
+				Count = 2,
+				Interval = 0.2,
+				Scatter = 10,
+				WidthScale = 0.5,
+				Flash = "Small",
+				Sparks = { Spec = Emitters.WhiteSparks, Count = 20 },
+			},
+			Spheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 16,
+					Duration = 0.35,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 28,
+					Duration = 0.65,
+					Color = Palette.Glow,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0.1,
+					Delay = 0.04,
+				}),
+			},
+			Rocks = rocks({
+				Count = 16,
+				Radius = 7,
+				SizeMin = 1.4,
+				SizeMax = 3.2,
+				TiltMin = 25,
+				TiltMax = 50,
+				RadiusJitter = 1.2,
+				Stagger = 0.006,
+				RiseTime = 0.22,
+				Hold = 1.5,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			Focus = focus({
+				Count = 44,
+				InnerRadius = 0.06,
+				LengthMin = 0.3,
+				LengthMax = 0.75,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.05,
+				Duration = 0.4,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Heavy",
+			Punch = "Heavy",
+			Residual = { -- static electricity lingering on the scorched ground
+				Duration = 2.4,
+				Interval = 0.22,
+				Count = 2,
+				Radius = 7,
+				ArcLengthMin = 1, -- studs
+				ArcLengthMax = 3.5,
+				AngleWander = 1, -- radians each arc may turn from the radial direction
+				Bolt = bolt({
+					Segments = 5,
+					Amplitude = 0.5,
+					Width = 0.12,
+					EndWidthScale = 0.2,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.04,
+					Duration = 0.12,
+					FadeTime = 0.06,
+				}),
+			},
 		},
 	},
 
@@ -919,7 +1470,7 @@ Config.Spells = {
 				InnerRadiusScale = 0.78,
 				StarPoints = 5,
 				StarStep = 2,
-				Ticks = 16,
+				Ticks = 24,
 				TickLength = 0.8,
 				Width = 0.22,
 				Color = Palette.White,
@@ -1079,6 +1630,93 @@ Config.Spells = {
 				},
 			}),
 			Shake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			FireRing = { -- crimson flames licking up along the seal's edge
+				Spec = spec({
+					Texture = Config.Textures.Fire,
+					Color = cs(Palette.CrimsonBright, Palette.Crimson),
+					Size = ns(0, 1.6, 0.6, 1.2, 1, 0),
+					Transparency = ns(0, 0.2, 0.7, 0.4, 1, 1),
+					Lifetime = nr(0.4, 0.7),
+					Speed = nr(6, 12),
+					SpreadAngle = Vector2.new(8, 8),
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS * 0.6,
+					LightInfluence = 0,
+					Squash = ns(0, 0.5, 1, 1),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Surface,
+					EmissionDirection = Enum.NormalId.Top,
+					Flipbook = true,
+					LargeFlipbook = true,
+				}),
+				Count = 6,
+				Interval = 0.04,
+			},
+			Spirals = { -- flame ribbons coiling up the pillar
+				Count = 3,
+				Radius = 5,
+				Speed = 6,
+				RiseSpeed = 26,
+				Width = 1.2,
+				Lifetime = 0.5,
+				Color = Palette.CrimsonBright,
+				Transparency = ns(0, 0, 1, 1),
+				LightEmission = 1,
+				Brightness = LIGHT_BRIGHTNESS,
+				InkWidth = 1.8, -- matching black ribbons, offset by half a turn
+				InkBrightness = DARK_BRIGHTNESS,
+			},
+			EruptRocks = rocks({
+				Count = 14,
+				Radius = 6,
+				SizeMin = 1.4,
+				SizeMax = 3,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1,
+				Stagger = 0.01,
+				RiseTime = 0.25,
+				Hold = 2,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Basalt,
+			}),
+			EruptPunch = "Medium",
+			EruptShake = "Medium",
+			EndSpheres = {
+				sphere({
+					StartSize = 2,
+					EndSize = 18,
+					Duration = 0.4,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0,
+				}),
+				sphere({
+					StartSize = 4,
+					EndSize = 30,
+					Duration = 0.7,
+					Color = Palette.CrimsonBright,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+			},
+			EndFocus = focus({
+				Count = 36,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.65,
+				Thickness = 4,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.35,
+				RerollInterval = 0.04,
+			}),
+			EndImpact = "Heavy",
+			EndPunch = "Heavy",
 		},
 	},
 
@@ -1199,7 +1837,7 @@ Config.Spells = {
 				},
 			}),
 			Fragments = shards({
-				Count = 5, -- per spike
+				Count = 8, -- per spike
 				SizeMin = 0.2,
 				SizeMax = 0.5,
 				StartRadius = 0.6,
@@ -1219,6 +1857,100 @@ Config.Spells = {
 			ShatterSnow = 10, -- snow particles per shattered spike
 			Shake = "Light",
 			ImpactShake = "Medium",
+			-- Boss-tier layers --------------------------------------------
+			Cluster = { -- giant crystals erupting in a crown at the target
+				Count = 9,
+				HeightMin = 9,
+				HeightMax = 18,
+				WidthMin = 1.8,
+				WidthMax = 3.2,
+				TiltMin = 15, -- degrees leaning outward
+				TiltMax = 50,
+				Radius = 2.5,
+				AngleJitter = 0.3, -- radians
+				GrowTime = 0.18,
+				Stagger = 0.02,
+			},
+			IceRocks = rocks({
+				Count = 18,
+				Radius = 8,
+				SizeMin = 1.4,
+				SizeMax = 3,
+				TiltMin = 20,
+				TiltMax = 45,
+				RadiusJitter = 1.4,
+				Stagger = 0.008,
+				RiseTime = 0.22,
+				Hold = 1.4,
+				SinkTime = 0.6,
+				UseGroundMaterial = false,
+				Color = Palette.Ice,
+				Material = Enum.Material.Ice,
+			}),
+			Spheres = {
+				sphere({
+					StartSize = 1,
+					EndSize = 14,
+					Duration = 0.35,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.1,
+				}),
+				sphere({
+					StartSize = 3,
+					EndSize = 28,
+					Duration = 0.7,
+					Color = Palette.PaleCyan,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.05,
+				}),
+			},
+			Blizzard = { -- swirling snow storm around the impact
+				Spec = spec({
+					Texture = Config.Textures.Snow,
+					Color = cs(Palette.White, Palette.PaleCyan),
+					Size = ns(0, 0.4, 1, 0),
+					Transparency = ns(0, 0, 0.8, 0.3, 1, 1),
+					Lifetime = nr(1, 1.6),
+					Speed = nr(8, 16),
+					SpreadAngle = Vector2.new(180, 30),
+					LightEmission = 1,
+					Brightness = 3,
+					LightInfluence = 0,
+					Drag = 1,
+					Acceleration = Vector3.new(0, -2, 0),
+					Shape = Enum.ParticleEmitterShape.Disc,
+					ShapeStyle = Enum.ParticleEmitterShapeStyle.Volume,
+				}),
+				Count = 10,
+				Interval = 0.06,
+				Duration = 1.6,
+				Radius = 10,
+			},
+			Focus = focus({
+				Count = 34,
+				InnerRadius = 0.08,
+				LengthMin = 0.25,
+				LengthMax = 0.65,
+				Thickness = 3,
+				Color = Palette.White,
+				Transparency = 0.15,
+				Duration = 0.35,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Medium",
+			Punch = "Medium",
+			ShatterRing = ring({
+				StartRadius = 2,
+				EndRadius = 22,
+				Duration = 0.5,
+				Segments = 32,
+				Width = 0.8,
+				Color = Palette.PaleCyan,
+				LightEmission = 1,
+				Brightness = LIGHT_BRIGHTNESS,
+			}),
 		},
 	},
 
@@ -1295,7 +2027,7 @@ Config.Spells = {
 				Count = 2,
 			},
 			Spirals = {
-				Count = 2,
+				Count = 3,
 				Radius = 1.6,
 				Speed = 24, -- rad/s around the travel axis
 				Width = 0.18,
@@ -1306,7 +2038,7 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS,
 			},
 			Split = {
-				Count = 4,
+				Count = 6,
 				Scale = 0.4,
 				Distance = 14,
 				Duration = 0.3,
@@ -1334,7 +2066,7 @@ Config.Spells = {
 				Count = 25,
 			},
 			Shards = shards({
-				Count = 10,
+				Count = 18,
 				SizeMin = 0.2,
 				SizeMax = 0.55,
 				StartRadius = 4,
@@ -1371,6 +2103,62 @@ Config.Spells = {
 				},
 			}),
 			Shake = "Light",
+			-- Boss-tier layers --------------------------------------------
+			Slashes = { -- three crescents fired in quick succession
+				Count = 3,
+				Interval = 0.11,
+				Rolls = { 12, -24, 38 }, -- degrees; one entry per slash (cycled)
+				SideOffset = 2.5, -- studs between the slashes' paths
+			},
+			PathRocks = rocks({
+				Count = 0, -- unused for lines; Spacing decides the count
+				Spacing = 3,
+				Radius = 2.6, -- distance either side of the slash line
+				SizeMin = 1,
+				SizeMax = 2.2,
+				TiltMin = 25,
+				TiltMax = 55,
+				RadiusJitter = 0.6,
+				Stagger = 0.012,
+				RiseTime = 0.2,
+				Hold = 1.4,
+				SinkTime = 0.6,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			Spheres = {
+				sphere({
+					StartSize = 1,
+					EndSize = 12,
+					Duration = 0.3,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0.1,
+				}),
+				sphere({
+					StartSize = 2,
+					EndSize = 22,
+					Duration = 0.55,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.04,
+				}),
+			},
+			Focus = focus({
+				Count = 36,
+				InnerRadius = 0.08,
+				LengthMin = 0.3,
+				LengthMax = 0.7,
+				Thickness = 3,
+				Color = Palette.White,
+				Transparency = 0.1,
+				Duration = 0.3,
+				RerollInterval = 0.04,
+			}),
+			Impact = "Medium",
+			Punch = "Medium",
 		},
 	},
 
@@ -1420,7 +2208,7 @@ Config.Spells = {
 				Brightness = LIGHT_BRIGHTNESS * 2,
 			},
 			PillarBolts = {
-				Count = 6,
+				Count = 10,
 				Radius = 6,
 				Bolt = bolt({
 					Segments = 16,
@@ -1460,7 +2248,7 @@ Config.Spells = {
 				Radius = 11,
 			},
 			InkTrails = {
-				Count = 4,
+				Count = 6,
 				Radius = 10,
 				Speed = 5, -- rad/s
 				RiseSpeed = 40, -- studs/s
@@ -1518,7 +2306,7 @@ Config.Spells = {
 				},
 			}),
 			Shards = shards({
-				Count = 40,
+				Count = 70,
 				SizeMin = 0.3,
 				SizeMax = 1.2,
 				StartRadius = 20,
@@ -1536,6 +2324,134 @@ Config.Spells = {
 				Material = Enum.Material.SmoothPlastic,
 			}),
 			Shake = "Ultimate",
+			-- Boss-tier layers --------------------------------------------
+			ChargeArcs = { -- lightning crawling over the rune circle while it charges
+				Count = 5,
+				Radius = 20,
+				Span = 1, -- radians each arc may stretch around the circle
+				Bolt = bolt({
+					Segments = 8,
+					Amplitude = 2,
+					Width = 0.35,
+					EndWidthScale = 0.3,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+					FlickerInterval = 0.05,
+					Duration = 1.4,
+					FadeTime = 0.2,
+				}),
+			},
+			ChargeFocus = focus({ -- focus lines toward the circle as it finishes charging
+				Count = 30,
+				InnerRadius = 0.12,
+				LengthMin = 0.2,
+				LengthMax = 0.5,
+				Thickness = 2,
+				Color = Palette.White,
+				Transparency = 0.35,
+				Duration = 0.5,
+				RerollInterval = 0.05,
+			}),
+			Spears = { -- smaller light pillars slamming down around the main one
+				Count = 8,
+				Radius = 18,
+				AngleJitter = 0.2, -- radians
+				Delay = 0.2, -- after the main impact
+				Interval = 0.06,
+				Height = 50,
+				CoreWidth = 2.4,
+				GlowWidth = 6,
+				GlowTransparency = 0.55,
+				CrashTime = 0.08,
+				Duration = 0.45,
+				FadeTime = 0.3,
+				Flash = "Small",
+				Ring = ring({
+					StartRadius = 1,
+					EndRadius = 9,
+					Duration = 0.35,
+					Segments = 20,
+					Width = 0.8,
+					Color = Palette.White,
+					LightEmission = 1,
+					Brightness = LIGHT_BRIGHTNESS,
+				}),
+			},
+			Spheres = {
+				sphere({
+					StartSize = 4,
+					EndSize = 40,
+					Duration = 0.5,
+					Color = Palette.White,
+					Material = Enum.Material.Neon,
+					StartTransparency = 0,
+				}),
+				sphere({
+					StartSize = 8,
+					EndSize = 70,
+					Duration = 1,
+					Color = Palette.Black,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0,
+					Delay = 0.08,
+				}),
+				sphere({
+					StartSize = 10,
+					EndSize = 95,
+					Duration = 1.3,
+					Color = Palette.White,
+					Material = Enum.Material.ForceField,
+					StartTransparency = 0.2,
+					Delay = 0.2,
+				}),
+			},
+			Rocks = rocks({
+				Count = 28,
+				Radius = 16,
+				SizeMin = 3,
+				SizeMax = 6.5,
+				TiltMin = 25,
+				TiltMax = 55,
+				RadiusJitter = 2.5,
+				Stagger = 0.006,
+				RiseTime = 0.3,
+				Hold = 2.6,
+				SinkTime = 0.8,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			OuterRocks = rocks({
+				Count = 36,
+				Radius = 28,
+				SizeMin = 2,
+				SizeMax = 4.5,
+				TiltMin = 15,
+				TiltMax = 40,
+				RadiusJitter = 3,
+				Stagger = 0.006,
+				RiseTime = 0.3,
+				Hold = 2.4,
+				SinkTime = 0.8,
+				UseGroundMaterial = true,
+				Color = Palette.Smoke,
+				Material = Enum.Material.Slate,
+			}),
+			OuterRocksDelay = 0.12,
+			Focus = focus({
+				Count = 64,
+				InnerRadius = 0.05,
+				LengthMin = 0.3,
+				LengthMax = 0.85,
+				Thickness = 5,
+				Color = Palette.White,
+				Transparency = 0,
+				Duration = 0.55,
+				RerollInterval = 0.035,
+			}),
+			Impact = "Ultimate",
+			Punch = "Ultimate",
 		},
 	},
 }
@@ -1586,6 +2502,13 @@ make("ModuleScript", "AbyssalAura", i3, [=[
 	  * a cracked dark decal spreading under the player (re-spawned when
 	    they move away from it)
 
+	Boss-tier layers: a charge-up burst (rocks erupting in a ring + a black
+	ForceField shell), a looping column of ink wisps and rising sparks,
+	electricity crackling over the body, and a white ground pulse every
+	GroundPulse.Interval. Stopping adds impact frames, focus lines, an FOV
+	punch, layered spheres and a second rock ring. Body-attached sizes
+	scale with the caster (a world boss scaled to 3x gets a 3x aura).
+
 	Play(character) starts it (ignored if already active).
 	Stop(character) ends it with a heavy white flash burst. The aura also
 	stops itself when the character dies / is removed, or after
@@ -1597,9 +2520,14 @@ local Util = script.Parent.Parent.Util
 local CameraShake = require(Util.CameraShake)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
+local Lightning = require(Util.Lightning)
 local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local Spell = Config.Spells.AbyssalAura
@@ -1619,6 +2547,12 @@ local function stopBurst(position: Vector3)
 	Emit.burstAt(cframe, { Spec = Config.Emitters.CoreFlare, Count = C.StopCoreCount })
 	Shockwave.Ground(position, C.StopRing)
 	CameraShake.Preset(C.StopShake, position)
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.StopImpact, position)
+	FocusLines.Play(position, C.StopFocus)
+	CameraShake.PunchPreset(C.StopPunch, position)
+	Sphere.Layers(position, C.StopSpheres)
+	RockRing.Ring(position, C.StopRocks)
 end
 
 local function isAlive(character: Model): boolean
@@ -1642,15 +2576,25 @@ function AbyssalAura.Play(character: Model, _targetPosition: Vector3)
 	group.Name = "AbyssalAura"
 	group.Parent = Emit.folder()
 
+	-- Feet from HipHeight when available (correct for scaled boss rigs).
 	local function feetPosition(part: BasePart): Vector3
-		return (part.CFrame * CFrame.new(C.FootOffset)).Position
+		return Emit.feet(character) or (part.CFrame * CFrame.new(C.FootOffset)).Position
 	end
+	local scale = Emit.characterScale(character)
 
 	-- Base: flames + glow + light, all following the feet.
-	local base = Emit.anchor(CFrame.new(feetPosition(root)), nil, C.BaseSize)
+	local base = Emit.anchor(CFrame.new(feetPosition(root)), nil, C.BaseSize * scale)
 	base.Parent = group
 	local flames = Emit.emitter(base, C.Flames.Spec)
 	local glow = Emit.emitter(base, C.BaseGlow.Spec)
+	local inkPillar = Emit.emitter(base, C.InkPillar.Spec)
+	local risingSparks = Emit.emitter(base, C.RisingSparks.Spec)
+
+	-- Charge-up burst.
+	local startFeet = feetPosition(root)
+	RockRing.Ring(startFeet, C.ChargeRocks)
+	Sphere.Burst(root.Position, C.ChargeSphere)
+	CameraShake.Preset(C.ChargeShake, startFeet)
 	local light = Instance.new("PointLight")
 	light.Color = C.Light.Color
 	light.Brightness = C.Light.Brightness
@@ -1700,6 +2644,8 @@ function AbyssalAura.Play(character: Model, _targetPosition: Vector3)
 		active[character] = nil
 		flames.Enabled = false
 		glow.Enabled = false
+		inkPillar.Enabled = false
+		risingSparks.Enabled = false
 		for _, orbit in orbits do
 			orbit.Stop()
 		end
@@ -1709,12 +2655,19 @@ function AbyssalAura.Play(character: Model, _targetPosition: Vector3)
 		end
 		Emit.tween(light, C.Orbit.Lifetime, { Brightness = 0 })
 		-- Let the last flame particles finish before destroying the group.
-		local linger = math.max(C.Flames.Spec.Lifetime.Max, C.BaseGlow.Spec.Lifetime.Max)
+		local linger = math.max(
+			C.Flames.Spec.Lifetime.Max,
+			C.BaseGlow.Spec.Lifetime.Max,
+			C.InkPillar.Spec.Lifetime.Max,
+			C.RisingSparks.Spec.Lifetime.Max
+		)
 		Emit.cleanup(group, linger)
 		stopBurst(base.Position)
 	end
 
-	local stopStep = Emit.step(Spell.MaxDuration, function(_alpha, _dt, elapsed)
+	local arcTimer = 0
+	local pulseTimer = 0
+	local stopStep = Emit.step(Spell.MaxDuration, function(_alpha, dt, elapsed)
 		local currentRoot = Emit.root(character)
 		if currentRoot == nil or not group.Parent or not isAlive(character) then
 			return true
@@ -1734,6 +2687,19 @@ function AbyssalAura.Play(character: Model, _targetPosition: Vector3)
 			-- Fade in at the bottom of the loop and out at the top so the
 			-- wrap-around is invisible.
 			shard.Part.Transparency = 1 - math.sin(math.pi * loopAlpha)
+		end
+
+		-- Electricity crackling over the body.
+		arcTimer += dt
+		if arcTimer >= C.ArcPulse.Interval then
+			arcTimer = 0
+			Lightning.Crackle(currentRoot.Position, C.ArcPulse.Radius * scale, C.ArcPulse.Count, C.ArcPulse.Bolt)
+		end
+		-- Periodic white ground pulse.
+		pulseTimer += dt
+		if pulseTimer >= C.GroundPulse.Interval then
+			pulseTimer = 0
+			Shockwave.Ground(feet, C.GroundPulse.Ring)
 		end
 
 		if (feet - decalCenter).Magnitude > C.DecalRespawnDistance then
@@ -1775,6 +2741,12 @@ make("ModuleScript", "CelestialVerdict", i3, [=[
 	   hanging mid-air before falling.
 	5. The pillar fades and Lighting is restored to its original values.
 
+	Boss-tier layers: lightning crawls over the rune circle while it charges
+	and focus lines snap toward it; the impact adds a 5-step impact-frame
+	sequence, a huge FOV punch, three nested spheres (white core, black and
+	white ForceField shells), two rings of erupting rocks, and eight smaller
+	light spears slamming down around the main pillar.
+
 	Overlapping casts share one dim: a reference count makes sure Lighting
 	is only restored after the last cast finishes.
 ]]
@@ -1787,11 +2759,15 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
 local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
 local RuneCircle = require(Util.RuneCircle)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.CelestialVerdict.VFX
@@ -1857,8 +2833,16 @@ end
 ---------------------------------------------------------------------------
 -- The light pillar.
 ---------------------------------------------------------------------------
-local function pillar(sky: Vector3, ground: Vector3)
-	local P = C.Pillar
+type PillarParams = {
+	CrashTime: number,
+	Duration: number,
+	FadeTime: number,
+	CoreWidth: number,
+	GlowWidth: number,
+	GlowTransparency: number,
+}
+
+local function pillar(sky: Vector3, ground: Vector3, P: PillarParams)
 	local total = P.CrashTime + P.Duration + P.FadeTime
 	local host = Emit.anchor(CFrame.new(ground), total)
 	local top = Emit.attachment(host, CFrame.new(sky - ground))
@@ -1868,10 +2852,10 @@ local function pillar(sky: Vector3, ground: Vector3)
 		local b = Instance.new("Beam")
 		b.Attachment0 = top
 		b.Attachment1 = bottom
-		b.Color = ColorSequence.new(P.Color)
+		b.Color = ColorSequence.new(C.Pillar.Color)
 		b.LightEmission = 1
 		b.LightInfluence = 0
-		b.Brightness = P.Brightness
+		b.Brightness = C.Pillar.Brightness
 		b.FaceCamera = true
 		b.Segments = 1
 		b.Width0 = width
@@ -1918,12 +2902,25 @@ function CelestialVerdict.Play(_character: Model, targetPosition: Vector3)
 	-- something later in this function errors.
 	task.delay(C.CircleTime + C.Pillar.CrashTime + C.Pillar.Duration + C.Pillar.FadeTime, restoreSky)
 	RuneCircle.Spawn(CFrame.new(sky), C.Circle)
-	task.wait(C.CircleTime)
+	-- Lightning crawling over the circle while it charges.
+	local arcs = C.ChargeArcs
+	for _ = 1, arcs.Count do
+		Lightning.Bolt(function()
+			local a = Emit.random(0, math.pi * 2)
+			local b = a + Emit.random(-arcs.Span, arcs.Span)
+			local r = arcs.Radius
+			return sky + Vector3.new(math.cos(a) * r, 0, math.sin(a) * r),
+				sky + Vector3.new(math.cos(b) * r, 0, math.sin(b) * r)
+		end, arcs.Bolt)
+	end
+	task.wait(C.CircleTime - C.ChargeFocus.Duration)
+	FocusLines.Play(sky, C.ChargeFocus)
+	task.wait(C.ChargeFocus.Duration)
 
 	-------------------------------------------------------------------
 	-- 3. Pillar crashes down.
 	-------------------------------------------------------------------
-	pillar(sky, ground)
+	pillar(sky, ground, C.Pillar)
 
 	local boltParams = C.PillarBolts.Bolt
 	for i = 1, C.PillarBolts.Count do
@@ -1974,6 +2971,28 @@ function CelestialVerdict.Play(_character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(ground, C.Decal)
 	Debris.Shards(ground, C.Shards)
 	CameraShake.Preset(C.Shake, ground)
+
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.Impact, ground)
+	FocusLines.Play(ground, C.Focus)
+	CameraShake.PunchPreset(C.Punch, ground)
+	Sphere.Layers(ground, C.Spheres)
+	RockRing.Ring(ground, C.Rocks)
+	task.delay(C.OuterRocksDelay, RockRing.Ring, ground, C.OuterRocks)
+
+	-- Light spears slamming down around the main pillar.
+	local spears = C.Spears
+	task.wait(spears.Delay)
+	for i = 1, spears.Count do
+		local angle = (i / spears.Count) * math.pi * 2 + Emit.random(-spears.AngleJitter, spears.AngleJitter)
+		local spot = Emit.groundAt(ground + Vector3.new(math.cos(angle), 0, math.sin(angle)) * spears.Radius)
+		pillar(spot + Vector3.yAxis * spears.Height, spot, spears)
+		task.delay(spears.CrashTime, function()
+			Flash.Impact(spot, spears.Flash)
+			Shockwave.Ground(spot, spears.Ring)
+		end)
+		task.wait(spears.Interval)
+	end
 	-- 5. The pillar fades by itself; Lighting is restored by the delay above.
 end
 
@@ -1995,6 +3014,11 @@ make("ModuleScript", "FrostRequiem", i3, [=[
 	   flash and ring, and a frozen star-pattern crack decal spreads.
 	3. After ShatterDelay seconds every spike shatters into tumbling glass
 	   fragments and is destroyed.
+
+	Boss-tier layers: a crown of giant crystals erupts at the target, ice
+	rocks burst up in a ring, a blizzard swirls over the impact, and the
+	hit adds impact frames, focus lines, an FOV punch and a white core
+	inside a pale-cyan ForceField shell. The shatter sends out a cyan ring.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -2003,8 +3027,12 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
+local RockRing = require(Util.RockRing)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.FrostRequiem.VFX
@@ -2013,6 +3041,30 @@ local Padding = Config.General.CleanupPadding
 local FrostRequiem = {}
 
 type Spike = { Part: Part, Base: Vector3 }
+
+-- Grows one crystal from under the ground at `base` with the given shape.
+local function growCrystal(
+	model: Model,
+	base: CFrame,
+	height: number,
+	width: number,
+	orientation: CFrame,
+	growTime: number
+): Spike
+	local spike = Emit.part(Vector3.new(width, height, width), C.SpikeColor, C.SpikeMaterial)
+	spike.Name = "FrostSpike"
+	spike.Transparency = C.SpikeTransparency
+	local buried = base * orientation * CFrame.new(0, -height / 2, 0)
+	local grown = base * orientation * CFrame.new(0, height * (0.5 - C.SpikeBury), 0)
+	spike.CFrame = buried
+	spike.Parent = model
+	Emit.tween(spike, growTime, { CFrame = grown }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+	local position = base.Position
+	Emit.burstAt(CFrame.new(position), C.Mist)
+	Emit.burstAt(CFrame.new(position), C.Snow)
+	return { Part = spike, Base = position }
+end
 
 local function growSpike(model: Model, base: CFrame, scale: number): Spike
 	local height = Emit.random(C.SpikeHeightMin, C.SpikeHeightMax) * scale
@@ -2024,20 +3076,30 @@ local function growSpike(model: Model, base: CFrame, scale: number): Spike
 		math.rad(C.SpikeBaseYaw) + Emit.random(0, math.pi),
 		Emit.random(-tilt, tilt)
 	)
+	return growCrystal(model, base, height, width, orientation, C.SpikeGrowTime)
+end
 
-	local spike = Emit.part(Vector3.new(width, height, width), C.SpikeColor, C.SpikeMaterial)
-	spike.Name = "FrostSpike"
-	spike.Transparency = C.SpikeTransparency
-	local buried = base * orientation * CFrame.new(0, -height / 2, 0)
-	local grown = base * orientation * CFrame.new(0, height * (0.5 - C.SpikeBury), 0)
-	spike.CFrame = buried
-	spike.Parent = model
-	Emit.tween(spike, C.SpikeGrowTime, { CFrame = grown }, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-
-	local position = base.Position
-	Emit.burstAt(CFrame.new(position), C.Mist)
-	Emit.burstAt(CFrame.new(position), C.Snow)
-	return { Part = spike, Base = position }
+-- Crown of giant crystals leaning outward around `center`.
+local function growCluster(model: Model, center: Vector3, spikes: { Spike })
+	local cluster = C.Cluster
+	for i = 1, cluster.Count do
+		local angle = (i / cluster.Count) * math.pi * 2 + Emit.random(-cluster.AngleJitter, cluster.AngleJitter)
+		local outward = Vector3.new(math.cos(angle), 0, math.sin(angle))
+		local point = Emit.groundAt(center + outward * cluster.Radius)
+		local axis = Vector3.yAxis:Cross(outward).Unit
+		local lean = CFrame.fromAxisAngle(axis, math.rad(Emit.random(cluster.TiltMin, cluster.TiltMax)))
+		local orientation = lean * CFrame.Angles(0, math.rad(C.SpikeBaseYaw) + Emit.random(0, math.pi), 0)
+		local height = Emit.random(cluster.HeightMin, cluster.HeightMax)
+		local width = Emit.random(cluster.WidthMin, cluster.WidthMax)
+		task.delay((i - 1) * cluster.Stagger, function()
+			if model.Parent then
+				table.insert(
+					spikes,
+					growCrystal(model, CFrame.new(point), height, width, orientation, cluster.GrowTime)
+				)
+			end
+		end)
+	end
 end
 
 function FrostRequiem.Play(character: Model, targetPosition: Vector3)
@@ -2098,6 +3160,18 @@ function FrostRequiem.Play(character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(endGround, C.Decal)
 	CameraShake.Preset(C.ImpactShake, endGround)
 
+	-- Boss-tier layers.
+	growCluster(model, endGround, spikes)
+	ImpactFrame.Preset(C.Impact, impact)
+	FocusLines.Play(impact, C.Focus)
+	CameraShake.PunchPreset(C.Punch, impact)
+	Sphere.Layers(impact, C.Spheres)
+	RockRing.Ring(endGround, C.IceRocks)
+	local blizzard = C.Blizzard
+	local stormSize = Vector3.new(blizzard.Radius * 2, Config.General.AnchorSize.Y, blizzard.Radius * 2)
+	local storm = Emit.anchor(CFrame.new(endGround), blizzard.Duration + blizzard.Spec.Lifetime.Max, stormSize)
+	Emit.pulse(Emit.emitter(storm, blizzard.Spec), blizzard.Count, blizzard.Interval, blizzard.Duration)
+
 	-------------------------------------------------------------------
 	-- 3. Spikes shatter.
 	-------------------------------------------------------------------
@@ -2114,6 +3188,7 @@ function FrostRequiem.Play(character: Model, targetPosition: Vector3)
 			spike.Part:Destroy()
 		end
 	end
+	Shockwave.Ground(endGround, C.ShatterRing)
 	rim:Destroy()
 	model:Destroy()
 end
@@ -2138,6 +3213,11 @@ make("ModuleScript", "GaleReaper", i3, [=[
 
 	On contact it splits into smaller fading crescents, kicks up dust and
 	debris, and carves a long slash-shaped crack decal along its path.
+
+	Boss-tier layers: Slashes.Count crescents fire in quick succession at
+	alternating angles on parallel paths. Rocks erupt along both sides of
+	the slash line, and the final hit adds impact frames, focus lines, an
+	FOV punch and a white core inside a black ForceField shell.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -2146,8 +3226,12 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.GaleReaper.VFX
@@ -2262,10 +3346,11 @@ local function launch(
 	distance: number,
 	duration: number,
 	fade: boolean,
+	rollDegrees: number,
 	onArrive: (() -> ())?
 )
 	local host = crescent.Host
-	local roll = CFrame.Angles(0, 0, math.rad(C.RollDegrees))
+	local roll = CFrame.Angles(0, 0, math.rad(rollDegrees))
 	local function place(alpha: number)
 		local position = from + direction * distance * alpha
 		host.CFrame = CFrame.lookAt(position, position + direction) * roll
@@ -2317,13 +3402,12 @@ function GaleReaper.Play(character: Model, targetPosition: Vector3)
 	local direction = if distance > 1e-3 then delta.Unit else root.CFrame.LookVector
 	local travelTime = math.max(distance / C.Speed, C.MinTravelTime)
 
-	local blade = buildCrescent(1)
-	local speedLines = Emit.emitter(blade.Host, C.SpeedLines.Spec)
-	local wake = Emit.emitter(blade.Host, C.WakeSmoke.Spec)
-	Emit.pulse(speedLines, C.SpeedLines.Count, C.SpeedLines.Interval, travelTime)
-	Emit.pulse(wake, C.WakeSmoke.Count, C.SpeedLines.Interval, travelTime)
+	local side = direction:Cross(Vector3.yAxis)
+	side = if side.Magnitude > 1e-3 then side.Unit else root.CFrame.RightVector
+	local flat = Vector3.new(direction.X, 0, direction.Z)
+	local flatDirection = if flat.Magnitude > 1e-3 then flat.Unit else root.CFrame.LookVector
+	local slashes = C.Slashes
 
-	-- Wind spirals wrapping the travel axis.
 	local spiralStyle: Types.TrailStyle = {
 		Width = C.Spirals.Width,
 		Lifetime = C.Spirals.Lifetime,
@@ -2333,44 +3417,82 @@ function GaleReaper.Play(character: Model, targetPosition: Vector3)
 		Brightness = C.Spirals.Brightness,
 	}
 	local axisTurn = CFrame.Angles(math.pi / 2, 0, 0) -- orbit plane perpendicular to travel
-	for i = 1, C.Spirals.Count do
-		OrbitTrail.Start(function(): CFrame?
-			if not blade.Host.Parent then
-				return nil
-			end
-			return blade.Host.CFrame * axisTurn
-		end, {
-			Radius = C.Spirals.Radius,
-			Height = 0,
-			Speed = C.Spirals.Speed,
-			Tilt = Vector3.zero,
-			Phase = (i / C.Spirals.Count) * math.pi * 2,
-		}, spiralStyle, travelTime)
-	end
 
-	launch(blade, start, direction, distance, travelTime, false, function()
-		local ground = Emit.groundAt(finish)
-		local flat = Vector3.new(direction.X, 0, direction.Z)
-		local flatDirection = if flat.Magnitude > 1e-3 then flat.Unit else root.CFrame.LookVector
+	local function fireSlash(index: number)
+		local isFinal = index == slashes.Count
+		local offset = side * ((index - (slashes.Count + 1) / 2) * slashes.SideOffset)
+		local from = start + offset
+		local to = finish + offset
+		local roll = slashes.Rolls[((index - 1) % #slashes.Rolls) + 1]
 
-		-- Split into smaller crescents fanning outward.
-		local spread = math.rad(C.Split.SpreadDegrees)
-		for i = 1, C.Split.Count do
-			local t = if C.Split.Count > 1 then (i - 1) / (C.Split.Count - 1) else 0.5
-			local yaw = CFrame.Angles(0, -spread / 2 + spread * t, 0)
-			local splitDirection = (yaw * direction).Unit
-			launch(buildCrescent(C.Split.Scale), finish, splitDirection, C.Split.Distance, C.Split.Duration, true, nil)
+		local blade = buildCrescent(1)
+		local speedLines = Emit.emitter(blade.Host, C.SpeedLines.Spec)
+		local wake = Emit.emitter(blade.Host, C.WakeSmoke.Spec)
+		Emit.pulse(speedLines, C.SpeedLines.Count, C.SpeedLines.Interval, travelTime)
+		Emit.pulse(wake, C.WakeSmoke.Count, C.SpeedLines.Interval, travelTime)
+
+		-- Wind spirals wrapping the travel axis.
+		for i = 1, C.Spirals.Count do
+			OrbitTrail.Start(function(): CFrame?
+				if not blade.Host.Parent then
+					return nil
+				end
+				return blade.Host.CFrame * axisTurn
+			end, {
+				Radius = C.Spirals.Radius,
+				Height = 0,
+				Speed = C.Spirals.Speed,
+				Tilt = Vector3.zero,
+				Phase = (i / C.Spirals.Count) * math.pi * 2,
+			}, spiralStyle, travelTime)
 		end
 
-		Flash.Impact(finish, C.Flash)
-		Emit.burstAt(CFrame.new(ground), C.Dust)
-		Debris.Shards(ground, C.Shards)
-		-- The slash decal is centred half its length back along the path.
-		local slashLength = C.Decal.Length or C.Decal.Radius * 2
-		local decalCenter = ground - flatDirection * (slashLength / 2)
-		GroundDecal.Spawn(decalCenter, C.Decal, flatDirection)
-		CameraShake.Preset(C.Shake, ground)
-	end)
+		launch(blade, from, direction, distance, travelTime, false, roll, function()
+			local ground = Emit.groundAt(to)
+
+			-- Split into smaller crescents fanning outward.
+			local spread = math.rad(C.Split.SpreadDegrees)
+			for i = 1, C.Split.Count do
+				local t = if C.Split.Count > 1 then (i - 1) / (C.Split.Count - 1) else 0.5
+				local yaw = CFrame.Angles(0, -spread / 2 + spread * t, 0)
+				local splitDirection = (yaw * direction).Unit
+				launch(
+					buildCrescent(C.Split.Scale),
+					to,
+					splitDirection,
+					C.Split.Distance,
+					C.Split.Duration,
+					true,
+					roll,
+					nil
+				)
+			end
+
+			Flash.Impact(to, C.Flash)
+			Emit.burstAt(CFrame.new(ground), C.Dust)
+			Debris.Shards(ground, C.Shards)
+			-- The slash decal is centred half its length back along the path.
+			local slashLength = C.Decal.Length or C.Decal.Radius * 2
+			local decalCenter = ground - flatDirection * (slashLength / 2)
+			GroundDecal.Spawn(decalCenter, C.Decal, flatDirection)
+			CameraShake.Preset(C.Shake, ground)
+
+			if isFinal then
+				ImpactFrame.Preset(C.Impact, to)
+				FocusLines.Play(to, C.Focus)
+				CameraShake.PunchPreset(C.Punch, to)
+				Sphere.Layers(to, C.Spheres)
+				RockRing.Line(Emit.groundAt(start), ground, C.PathRocks)
+			end
+		end)
+	end
+
+	for index = 1, slashes.Count do
+		fireSlash(index)
+		if index < slashes.Count then
+			task.wait(slashes.Interval)
+		end
+	end
 end
 
 -- Typed export: the checker verifies this module matches Types.SpellModule.
@@ -2391,6 +3513,12 @@ make("ModuleScript", "GrimoireAwakening", i3, [=[
 	     white trails orbit the caster for Orbit.Duration seconds.
 	  5. The open book settles into a faint idle glow, then fades away.
 
+	Boss-tier layers: the book opening fires impact frames, focus lines, an
+	FOV punch, a white ring and a white core inside a black ForceField
+	shell. During the glyph phase white arcs jump between neighbouring
+	glyphs, an ink storm swirls up around the caster and white motes rise
+	out of the ring.
+
 	The book follows the caster's hand every frame. Everything is parented
 	to one Folder that is destroyed at the end (and scheduled with Debris as
 	a safety net), so repeated casts never leak.
@@ -2399,9 +3527,14 @@ make("ModuleScript", "GrimoireAwakening", i3, [=[
 local Config = require(script.Parent.Parent.Config)
 local Util = script.Parent.Parent.Util
 local Emit = require(Util.Emit)
+local CameraShake = require(Util.CameraShake)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
 local OrbitTrail = require(Util.OrbitTrail)
+local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.GrimoireAwakening.VFX
@@ -2608,6 +3741,13 @@ function GrimoireAwakening.Play(character: Model, _targetPosition: Vector3)
 	Emit.burstAt(CFrame.new(openPosition), { Spec = Config.Emitters.WhiteSparks, Count = C.OpenSparks })
 	Emit.burstAt(CFrame.new(openPosition), { Spec = Config.Emitters.CoreFlare, Count = 1 })
 	light.Brightness = C.IdleLight.Brightness
+	ImpactFrame.Preset(C.OpenImpact, openPosition)
+	FocusLines.Play(openPosition, C.OpenFocus)
+	CameraShake.PunchPreset(C.OpenPunch, openPosition)
+	CameraShake.Preset(C.OpenShake, openPosition)
+	Sphere.Layers(openPosition, C.OpenSpheres)
+	local feet = Emit.feet(character) or root.Position
+	Shockwave.Ground(feet, C.OpenRing)
 
 	-------------------------------------------------------------------
 	-- 5. Glyph ring at waist height + two orbiting trails.
@@ -2632,6 +3772,21 @@ function GrimoireAwakening.Play(character: Model, _targetPosition: Vector3)
 	end
 	local glyphAngle = 0
 	local glyphCenter = CFrame.new(root.Position)
+
+	-- Ink storm + rising motes on a cylinder host that follows the caster.
+	local storm = C.InkStorm
+	local stormSize = Vector3.new(storm.Radius * 2, storm.Height, storm.Radius * 2)
+	local stormHost = Emit.anchor(CFrame.new(feet), nil, stormSize)
+	stormHost.Parent = group
+	Emit.pulse(Emit.emitter(stormHost, storm.Spec), storm.Count, storm.Interval, C.Orbit.Duration)
+	Emit.pulse(
+		Emit.emitter(stormHost, C.RisingRunes.Spec),
+		C.RisingRunes.Count,
+		C.RisingRunes.Interval,
+		C.Orbit.Duration
+	)
+	local webTimer = 0
+
 	Emit.step(C.Orbit.Duration + C.GlyphFadeIn, function(_alpha, dt, elapsed)
 		if not group.Parent then
 			return true
@@ -2639,6 +3794,15 @@ function GrimoireAwakening.Play(character: Model, _targetPosition: Vector3)
 		local currentRoot = Emit.root(character)
 		if currentRoot then
 			glyphCenter = CFrame.new(currentRoot.Position)
+			stormHost.CFrame = CFrame.new(Emit.feet(character) or currentRoot.Position)
+		end
+		-- Arcs jumping between neighbouring glyphs.
+		webTimer += dt
+		if webTimer >= C.GlyphWeb.Interval and elapsed < C.Orbit.Duration and #glyphs > 1 then
+			webTimer = 0
+			local i = Emit.randomInt(1, #glyphs)
+			local a, b = glyphs[i], glyphs[(i % #glyphs) + 1]
+			Lightning.Strike(a.Position, b.Position, C.GlyphWeb.Bolt)
 		end
 		glyphAngle += C.GlyphSpinSpeed * dt
 		for i, glyph in glyphs do
@@ -2702,7 +3866,14 @@ make("ModuleScript", "InfernoSeal", i3, [=[
 	3. Ends with a white flash core and a shockwave ring, leaving glowing
 	   embers drifting off a cracked ground decal with crimson ember cracks.
 
-	Crimson is only used for flames, embers, light and crack glow.
+	Boss-tier layers: crimson flames lick up along the seal's edge while it
+	draws; the eruption tears a ring of basalt rocks out of the ground with
+	an FOV punch, and crimson + black flame ribbons coil up the pillar.
+	The finale adds impact frames, focus lines and a white core sphere in a
+	crimson ForceField shell.
+
+	Crimson is only used for flames, embers, light, crack glow and the
+	finale's outer shell.
 ]]
 
 local Config = require(script.Parent.Parent.Config)
@@ -2710,9 +3881,14 @@ local Util = script.Parent.Parent.Util
 local CameraShake = require(Util.CameraShake)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
+local OrbitTrail = require(Util.OrbitTrail)
+local RockRing = require(Util.RockRing)
 local RuneCircle = require(Util.RuneCircle)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.InfernoSeal.VFX
@@ -2727,6 +3903,11 @@ function InfernoSeal.Play(_character: Model, targetPosition: Vector3)
 	-- 1. Seal draws itself.
 	-------------------------------------------------------------------
 	RuneCircle.Spawn(groundCFrame, C.Seal)
+	-- Flames licking up along the seal's edge for its whole life.
+	local ringLife = C.Seal.DrawTime + C.Seal.Hold
+	local ringSize = Vector3.new(C.Seal.Radius * 2, Config.General.AnchorSize.Y, C.Seal.Radius * 2)
+	local ringHost = Emit.anchor(groundCFrame, ringLife + C.FireRing.Spec.Lifetime.Max, ringSize)
+	Emit.pulse(Emit.emitter(ringHost, C.FireRing.Spec), C.FireRing.Count, C.FireRing.Interval, ringLife)
 	task.wait(C.Seal.DrawTime)
 
 	-------------------------------------------------------------------
@@ -2745,6 +3926,49 @@ function InfernoSeal.Play(_character: Model, targetPosition: Vector3)
 	for _, burst in { C.BlackFlames, C.CrimsonFlames, C.Embers, C.FlickerSmoke } do
 		local emitter = Emit.emitter(pillar, burst.Spec)
 		Emit.pulse(emitter, burst.Count, C.PulseInterval, C.PillarDuration)
+	end
+
+	-- Eruption: rocks + FOV punch + coiling flame ribbons.
+	RockRing.Ring(ground, C.EruptRocks)
+	CameraShake.PunchPreset(C.EruptPunch, ground)
+	CameraShake.Preset(C.EruptShake, ground)
+	local spiral = C.Spirals
+	local flameStyle: Types.TrailStyle = {
+		Width = spiral.Width,
+		Lifetime = spiral.Lifetime,
+		Color = spiral.Color,
+		Transparency = spiral.Transparency,
+		LightEmission = spiral.LightEmission,
+		Brightness = spiral.Brightness,
+	}
+	local inkStyle: Types.TrailStyle = {
+		Width = spiral.InkWidth,
+		Lifetime = spiral.Lifetime,
+		Color = Config.Palette.Black,
+		Transparency = spiral.Transparency,
+		LightEmission = 0,
+		Brightness = spiral.InkBrightness,
+	}
+	local center = CFrame.new(ground)
+	for i = 1, spiral.Count do
+		local phase = (i / spiral.Count) * math.pi * 2
+		type Ribbon = { Style: Types.TrailStyle, PhaseOffset: number }
+		local ribbons: { Ribbon } = {
+			{ Style = flameStyle, PhaseOffset = 0 },
+			{ Style = inkStyle, PhaseOffset = math.pi / spiral.Count }, -- black ribbons sit between the flames
+		}
+		for _, ribbon in ribbons do
+			OrbitTrail.Start(function(): CFrame?
+				return center
+			end, {
+				Radius = spiral.Radius,
+				Height = 0,
+				Speed = spiral.Speed,
+				Tilt = Vector3.zero,
+				Phase = phase + ribbon.PhaseOffset,
+				RiseSpeed = spiral.RiseSpeed,
+			}, ribbon.Style, C.PillarDuration)
+		end
 	end
 
 	local light = Instance.new("PointLight")
@@ -2773,6 +3997,10 @@ function InfernoSeal.Play(_character: Model, targetPosition: Vector3)
 	Shockwave.Ground(ground, C.EndRing)
 	GroundDecal.Spawn(ground, C.Decal)
 	CameraShake.Preset(C.Shake, ground)
+	ImpactFrame.Preset(C.EndImpact, core)
+	FocusLines.Play(core, C.EndFocus)
+	CameraShake.PunchPreset(C.EndPunch, core)
+	Sphere.Layers(core, C.EndSpheres)
 
 	local emberSize = Vector3.new(C.Decal.Radius * 2, C.PillarHeight, C.Decal.Radius * 2)
 	local emberHost = Emit.anchor(groundCFrame, C.GroundEmbers.Duration + C.GroundEmbers.Spec.Lifetime.Max, emberSize)
@@ -2798,6 +4026,12 @@ make("ModuleScript", "ThunderJudgment", i3, [=[
 	   crawling along the ground, scorched crack decal, spark burst and
 	   small neon sparks that physically bounce on the ground.
 
+	Boss-tier layers: smaller pre-strikes hammer the area around the target
+	before the main bolt; the main impact adds impact frames, focus lines,
+	an FOV punch, a white core sphere in a glowing ForceField shell, a ring
+	of rocks erupting from the ground, and static electricity that keeps
+	crackling over the crater for Residual.Duration seconds.
+
 	Bouncing sparks are client-local unanchored parts removed by Debris.
 ]]
 
@@ -2806,8 +4040,12 @@ local Util = script.Parent.Parent.Util
 local CameraShake = require(Util.CameraShake)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
+local RockRing = require(Util.RockRing)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.ThunderJudgment.VFX
@@ -2862,13 +4100,27 @@ function ThunderJudgment.Play(_character: Model, targetPosition: Vector3)
 	-------------------------------------------------------------------
 	-- 1. Clouds gather.
 	-------------------------------------------------------------------
-	local cloudLife = C.GatherTime + C.MainBolt.Duration + C.Clouds.Spec.Lifetime.Max
-	local cloudHost = Emit.anchor(CFrame.new(sky), cloudLife, C.CloudSize)
+	local pre = C.PreStrikes
+	local stormTime = C.GatherTime + pre.Count * pre.Interval + C.MainBolt.Duration
+	local cloudHost = Emit.anchor(CFrame.new(sky), stormTime + C.Clouds.Spec.Lifetime.Max, C.CloudSize)
 	local clouds = Emit.emitter(cloudHost, C.Clouds.Spec)
-	Emit.pulse(clouds, C.Clouds.Count, C.Clouds.Interval, C.GatherTime + C.MainBolt.Duration)
+	Emit.pulse(clouds, C.Clouds.Count, C.Clouds.Interval, stormTime)
 	Lightning.Crackle(sky, C.CloudCrackle.Radius, C.CloudCrackle.Count, C.CloudCrackle.Bolt)
 
 	task.wait(C.GatherTime)
+
+	-- Pre-strikes scattered around the target.
+	local preBolt = table.clone(C.MainBolt)
+	preBolt.Width = C.MainBolt.Width * pre.WidthScale
+	for _ = 1, pre.Count do
+		local angle = Emit.random(0, math.pi * 2)
+		local spot =
+			Emit.groundAt(ground + Vector3.new(math.cos(angle), 0, math.sin(angle)) * Emit.random(0, pre.Scatter))
+		Lightning.Strike(sky + (spot - ground) * Vector3.new(1, 0, 1), spot, preBolt)
+		Flash.Impact(spot, pre.Flash)
+		Emit.burstAt(CFrame.new(spot), pre.Sparks)
+		task.wait(pre.Interval)
+	end
 
 	-------------------------------------------------------------------
 	-- 2. The bolt.
@@ -2888,6 +4140,34 @@ function ThunderJudgment.Play(_character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(ground, C.Decal)
 	bouncingSparks(ground)
 	CameraShake.Preset(C.Shake, ground)
+
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.Impact, impact)
+	FocusLines.Play(impact, C.Focus)
+	CameraShake.PunchPreset(C.Punch, impact)
+	Sphere.Layers(impact, C.Spheres)
+	RockRing.Ring(ground, C.Rocks)
+
+	-- Residual static crackling over the crater.
+	local residual = C.Residual
+	local timer = residual.Interval
+	Emit.step(residual.Duration, function(_alpha, dt)
+		timer += dt
+		if timer >= residual.Interval then
+			timer = 0
+			for _ = 1, residual.Count do
+				local a = Emit.random(0, math.pi * 2)
+				local from = ground + Vector3.new(math.cos(a), 0, math.sin(a)) * Emit.random(0, residual.Radius)
+				local b = a + Emit.random(-residual.AngleWander, residual.AngleWander)
+				local to = from
+					+ Vector3.new(math.cos(b), 0, math.sin(b))
+						* Emit.random(residual.ArcLengthMin, residual.ArcLengthMax)
+				local lift = Vector3.yAxis * C.GroundArcs.Lift
+				Lightning.Strike(Emit.groundAt(from) + lift, Emit.groundAt(to) + lift, residual.Bolt)
+			end
+		end
+		return false
+	end)
 end
 
 -- Typed export: the checker verifies this module matches Types.SpellModule.
@@ -2905,6 +4185,10 @@ make("ModuleScript", "VoidBurst", i3, [=[
 	   lens-flare streak, white crackling electricity around the core,
 	   curved black shockwave arcs spraying outward, a white ground ring,
 	   a circular crack decal and dark shards that float up then drop.
+	3. Boss-tier layers on detonation: anime impact frames + focus lines,
+	   a white core sphere inside expanding black/white ForceField shells,
+	   a ring of rocks erupting from the ground, an FOV punch, a delayed
+	   black aftershock ring and smoke that lingers over the crater.
 
 	All instances are owned by self-cleaning utilities (Debris / step
 	callbacks), so nothing persists after the effect.
@@ -2916,9 +4200,13 @@ local CameraShake = require(Util.CameraShake)
 local Debris = require(Util.Debris)
 local Emit = require(Util.Emit)
 local Flash = require(Util.Flash)
+local FocusLines = require(Util.FocusLines)
 local GroundDecal = require(Util.GroundDecal)
+local ImpactFrame = require(Util.ImpactFrame)
 local Lightning = require(Util.Lightning)
+local RockRing = require(Util.RockRing)
 local Shockwave = require(Util.Shockwave)
+local Sphere = require(Util.Sphere)
 local Types = require(Util.Types)
 
 local C = Config.Spells.VoidBurst.VFX
@@ -2967,6 +4255,23 @@ function VoidBurst.Play(_character: Model, targetPosition: Vector3)
 	GroundDecal.Spawn(ground, C.Decal)
 	Debris.Shards(ground, C.Shards)
 	CameraShake.Preset(C.Shake, core)
+
+	-- Boss-tier layers.
+	ImpactFrame.Preset(C.Impact, core)
+	FocusLines.Play(core, C.Focus)
+	CameraShake.PunchPreset(C.Punch, core)
+	Sphere.Layers(core, C.Spheres)
+	RockRing.Ring(ground, C.Rocks)
+
+	local linger = C.LingerSmoke
+	local lingerSize = Vector3.new(linger.Radius * 2, Config.General.AnchorSize.Y, linger.Radius * 2)
+	local lingerHost = Emit.anchor(CFrame.new(ground), linger.Duration + linger.Spec.Lifetime.Max, lingerSize)
+	Emit.pulse(Emit.emitter(lingerHost, linger.Spec), linger.Count, linger.Interval, linger.Duration)
+
+	task.wait(C.Aftershock.Delay)
+	Shockwave.Ground(ground, C.Aftershock.Ring)
+	Emit.burstAt(CFrame.new(ground), C.Aftershock.Smoke)
+	CameraShake.Preset(C.Aftershock.Shake, ground)
 end
 
 -- Typed export: the checker verifies this module matches Types.SpellModule.
@@ -3081,6 +4386,82 @@ function CameraShake.Shake(params: Types.ShakeParams, source: Vector3?)
 	if not bound then
 		bound = true
 		RunService:BindToRenderStep(Settings.BindName, Enum.RenderPriority.Camera.Value + 1, update)
+	end
+end
+
+---------------------------------------------------------------------------
+-- FOV punch: the camera's field of view kicks out and eases back. Punches
+-- add together; the original FOV is restored exactly when the last ends.
+---------------------------------------------------------------------------
+type ActivePunch = { Delta: number, InTime: number, OutTime: number, Start: number }
+local punches: { ActivePunch } = {}
+local baseFov: number? = nil
+local punchConnection: RBXScriptConnection? = nil
+
+local function punchOffset(punch: ActivePunch, t: number): number
+	if t < punch.InTime then
+		local a = t / punch.InTime
+		return punch.Delta * (1 - (1 - a) ^ 3)
+	end
+	local a = math.clamp((t - punch.InTime) / punch.OutTime, 0, 1)
+	return punch.Delta * (1 - a) ^ 2
+end
+
+function CameraShake.Punch(params: Types.PunchParams, source: Vector3?)
+	local camera = Workspace.CurrentCamera
+	if not RunService:IsClient() or camera == nil then
+		return
+	end
+	local scale = distanceScale(source, camera)
+	if scale <= 0 then
+		return
+	end
+	if baseFov == nil then
+		baseFov = camera.FieldOfView
+	end
+	table.insert(
+		punches,
+		{ Delta = params.FovDelta * scale, InTime = params.InTime, OutTime = params.OutTime, Start = os.clock() }
+	)
+	if punchConnection then
+		return
+	end
+	punchConnection = RunService.RenderStepped:Connect(function()
+		local cam = Workspace.CurrentCamera
+		local base = baseFov
+		if cam == nil or base == nil then
+			return
+		end
+		local now = os.clock()
+		local total = 0
+		for index = #punches, 1, -1 do
+			local punch = punches[index]
+			local t = now - punch.Start
+			if t >= punch.InTime + punch.OutTime then
+				table.remove(punches, index)
+			else
+				total += punchOffset(punch, t)
+			end
+		end
+		cam.FieldOfView = math.clamp(base + total, Settings.MinFov, Settings.MaxFov)
+		if #punches == 0 then
+			cam.FieldOfView = base
+			baseFov = nil
+			local connection = punchConnection
+			punchConnection = nil
+			if connection then
+				connection:Disconnect()
+			end
+		end
+	end)
+end
+
+function CameraShake.PunchPreset(name: string, source: Vector3?)
+	local preset = (Settings.Punches :: any)[name] :: Types.PunchParams?
+	if preset then
+		CameraShake.Punch(preset, source)
+	else
+		warn("[VFX] Unknown camera punch preset:", name)
 	end
 end
 
@@ -3292,7 +4673,7 @@ end
 -- Rate 0 and are fired with :Emit(n); looping emitters set spec.Rate.
 function Emit.emitter(parent: Instance, spec: Types.EmitterSpec): ParticleEmitter
 	local emitter = Instance.new("ParticleEmitter")
-	emitter.Rate = spec.Rate or 0
+	emitter.Rate = (spec.Rate or 0) * Config.Intensity.Particles
 	emitter.Enabled = spec.Rate ~= nil
 	emitter.Texture = spec.Texture
 	emitter.Color = spec.Color
@@ -3342,13 +4723,20 @@ end
 function Emit.burstAt(cframe: CFrame, burst: Types.BurstSpec, size: Vector3?): ParticleEmitter
 	local host = Emit.anchor(cframe, burst.Spec.Lifetime.Max, size)
 	local emitter = Emit.emitter(host, burst.Spec)
-	emitter:Emit(burst.Count)
+	emitter:Emit(Emit.count(burst.Count))
 	return emitter
 end
 
 -- Burst on an existing emitter.
 function Emit.burst(emitter: ParticleEmitter, count: number)
-	emitter:Emit(count)
+	emitter:Emit(Emit.count(count))
+end
+
+-- Applies Config.Intensity.Particles to a particle count (always >= 1),
+-- capped at Config.Intensity.MaxPerBurst to protect low-end devices.
+function Emit.count(n: number): number
+	local scaled = math.floor(n * Config.Intensity.Particles + 0.5)
+	return math.clamp(scaled, 1, Config.Intensity.MaxPerBurst)
 end
 
 -- Per-frame callback for `duration` seconds (math.huge = until stopped).
@@ -3408,7 +4796,7 @@ function Emit.pulse(emitter: ParticleEmitter, count: number, interval: number, d
 		accumulator += dt
 		while accumulator >= interval do
 			accumulator -= interval
-			emitter:Emit(count)
+			emitter:Emit(Emit.count(count))
 		end
 		return false
 	end)
@@ -3457,10 +4845,9 @@ function Emit.fadeSequence(instance: Instance, property: string, from: number, t
 	return tween
 end
 
--- Raycasts straight down from above `position`, ignoring characters and
--- VFX. Returns the ground point and surface normal (or the input position
--- and world up when nothing is hit).
-function Emit.groundAt(position: Vector3): (Vector3, Vector3)
+-- Raw downward raycast used by groundAt and RockRing (for the ground
+-- material). Ignores characters and VFX. Returns nil when nothing is hit.
+function Emit.groundRaycast(position: Vector3): RaycastResult?
 	local ignore: { Instance } = { Emit.folder() }
 	for _, player in Players:GetPlayers() do
 		if player.Character then
@@ -3474,7 +4861,13 @@ function Emit.groundAt(position: Vector3): (Vector3, Vector3)
 
 	local origin = position + Vector3.yAxis * General.GroundRayHeight
 	local direction = -Vector3.yAxis * (General.GroundRayHeight + General.GroundRayDepth)
-	local result = Workspace:Raycast(origin, direction, params)
+	return Workspace:Raycast(origin, direction, params)
+end
+
+-- Ground point and surface normal under `position` (or the input position
+-- and world up when nothing is hit).
+function Emit.groundAt(position: Vector3): (Vector3, Vector3)
+	local result = Emit.groundRaycast(position)
 	if result then
 		return result.Position, result.Normal
 	end
@@ -3508,6 +4901,31 @@ function Emit.root(character: Model): BasePart?
 		return root
 	end
 	return nil
+end
+
+-- Position of a character's feet, correct for any rig size (a scaled-up
+-- world boss included): root bottom minus the humanoid's HipHeight.
+function Emit.feet(character: Model): Vector3?
+	local root = Emit.root(character)
+	if root == nil then
+		return nil
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local hip = if humanoid then humanoid.HipHeight else 0
+	return root.Position - Vector3.yAxis * (root.Size.Y / 2 + hip)
+end
+
+-- How big a character is relative to a default R15 rig (1 = normal player,
+-- ~3 = a boss scaled with Model:ScaleTo(3)). Spells use it to scale
+-- character-attached effects.
+function Emit.characterScale(character: Model): number
+	local ok, scale = pcall(function()
+		return character:GetScale()
+	end)
+	if ok and typeof(scale) == "number" and scale > 0 then
+		return scale
+	end
+	return 1
 end
 
 -- Random helpers ------------------------------------------------------------
@@ -3676,6 +5094,124 @@ end
 
 return Flash
 ]=])
+make("ModuleScript", "FocusLines", i12, [=[
+--!strict
+--[[
+	FocusLines
+	==========
+	Anime "focus lines" / speed lines (client only): thin white streaks
+	radiating from the impact point's position on screen, re-randomised
+	every RerollInterval for a flickering manga look, fading out over
+	Duration.
+
+	Built from Frames inside a CanvasGroup so the whole set fades with one
+	GroupTransparency tween. Everything is destroyed when it ends.
+
+	  FocusLines.Play(worldPosition, Config...FocusLines)
+]]
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Parent.Config)
+local Emit = require(script.Parent.Emit)
+local Types = require(script.Parent.Types)
+
+local Settings = Config.FocusLines
+
+local FocusLines = {}
+
+local function screenGui(): ScreenGui?
+	local player = Players.LocalPlayer
+	local playerGui = player and player:FindFirstChildOfClass("PlayerGui")
+	if playerGui == nil then
+		return nil
+	end
+	local existing = playerGui:FindFirstChild(Settings.GuiName)
+	if existing and existing:IsA("ScreenGui") then
+		return existing
+	end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = Settings.GuiName
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = Settings.DisplayOrder
+	gui.Parent = playerGui
+	return gui
+end
+
+function FocusLines.Play(worldPosition: Vector3, params: Types.FocusLineParams)
+	local gui = screenGui()
+	local camera = Workspace.CurrentCamera
+	if gui == nil or camera == nil then
+		return
+	end
+	local viewport = camera.ViewportSize
+	local screenPoint, onScreen = camera:WorldToViewportPoint(worldPosition)
+	if (camera.CFrame.Position - worldPosition).Magnitude > Settings.MaxDistance then
+		return
+	end
+	local center = if onScreen then Vector2.new(screenPoint.X, screenPoint.Y) else viewport / 2
+	local short = math.min(viewport.X, viewport.Y)
+
+	local group = Instance.new("CanvasGroup")
+	group.Size = UDim2.fromScale(1, 1)
+	group.BackgroundTransparency = 1
+	group.GroupTransparency = params.Transparency
+	group.Parent = gui
+
+	local taper = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(Settings.TaperPeak, 0),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+
+	local lines: { Frame } = {}
+	for _ = 1, params.Count do
+		local line = Instance.new("Frame")
+		line.AnchorPoint = Vector2.new(0.5, 0.5)
+		line.BorderSizePixel = 0
+		line.BackgroundColor3 = params.Color
+		line.Parent = group
+		local gradient = Instance.new("UIGradient")
+		gradient.Transparency = taper
+		gradient.Parent = line
+		table.insert(lines, line)
+	end
+
+	local function reroll()
+		for _, line in lines do
+			local angle = Emit.random(0, math.pi * 2)
+			local length = Emit.random(params.LengthMin, params.LengthMax) * short
+			local inner = params.InnerRadius * short
+			local mid = center + Vector2.new(math.cos(angle), math.sin(angle)) * (inner + length / 2)
+			line.Position = UDim2.fromOffset(mid.X, mid.Y)
+			line.Size = UDim2.fromOffset(length, Emit.random(params.Thickness * Settings.ThinScale, params.Thickness))
+			line.Rotation = math.deg(angle)
+		end
+	end
+	reroll()
+
+	local accumulator = 0
+	Emit.step(params.Duration, function(_alpha, dt)
+		if not group.Parent then
+			return true
+		end
+		accumulator += dt
+		if accumulator >= params.RerollInterval then
+			accumulator = 0
+			reroll()
+		end
+		return false
+	end, function()
+		group:Destroy()
+	end)
+	Emit.tween(group, params.Duration, { GroupTransparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	Emit.cleanup(group, params.Duration + Config.General.CleanupPadding)
+end
+
+return FocusLines
+]=])
 make("ModuleScript", "GroundDecal", i12, [=[
 --!strict
 --[[
@@ -3841,6 +5377,141 @@ function GroundDecal.Spawn(position: Vector3, params: Types.GroundDecalParams, f
 end
 
 return GroundDecal
+]=])
+make("ModuleScript", "ImpactFrame", i12, [=[
+--!strict
+--[[
+	ImpactFrame
+	===========
+	Anime-style impact frames (client only). For a few frames the whole
+	screen snaps to stark, high-contrast black and white (optionally with a
+	full-screen colour flash), alternating between steps, then returns to
+	normal.
+
+	Implemented with a temporary ColorCorrectionEffect in Lighting plus a
+	full-screen Frame. Both are destroyed when the sequence ends. Viewers
+	further than params.MaxDistance from the source see nothing.
+
+	  ImpactFrame.Play(Config.ImpactFrame.Presets.Heavy, impactPosition)
+	  ImpactFrame.Preset("Heavy", impactPosition)
+]]
+
+local Lighting = game:GetService("Lighting")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Parent.Config)
+local Emit = require(script.Parent.Emit)
+local Types = require(script.Parent.Types)
+
+local Settings = Config.ImpactFrame
+
+local ImpactFrame = {}
+
+local function overlayGui(): ScreenGui?
+	local player = Players.LocalPlayer
+	local playerGui = player and player:FindFirstChildOfClass("PlayerGui")
+	if playerGui == nil then
+		return nil
+	end
+	local existing = playerGui:FindFirstChild(Settings.GuiName)
+	if existing and existing:IsA("ScreenGui") then
+		return existing
+	end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = Settings.GuiName
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = Settings.DisplayOrder
+	gui.Parent = playerGui
+	return gui
+end
+
+function ImpactFrame.Play(params: Types.ImpactFrameParams, source: Vector3?)
+	if not Settings.Enabled or #params.Frames == 0 then
+		return
+	end
+	local camera = Workspace.CurrentCamera
+	if source and camera and (camera.CFrame.Position - source).Magnitude > params.MaxDistance then
+		return
+	end
+
+	local effect = Instance.new("ColorCorrectionEffect")
+	effect.Name = Settings.EffectName
+	effect.Parent = Lighting
+
+	local overlay: Frame? = nil
+	local gui = overlayGui()
+	if gui then
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.fromScale(1, 1)
+		frame.BorderSizePixel = 0
+		frame.BackgroundTransparency = 1
+		frame.Parent = gui
+		overlay = frame
+	end
+
+	local total = 0
+	for _, step in params.Frames do
+		total += step.Duration
+	end
+
+	local current = 0
+	local function apply(index: number)
+		local step = params.Frames[index]
+		effect.Saturation = step.Saturation
+		effect.Contrast = step.Contrast
+		effect.Brightness = step.Brightness
+		effect.TintColor = step.TintColor
+		if overlay then
+			if step.Overlay then
+				overlay.BackgroundColor3 = step.Overlay
+				overlay.BackgroundTransparency = step.OverlayTransparency or 0
+			else
+				overlay.BackgroundTransparency = 1
+			end
+		end
+	end
+
+	Emit.step(total, function(_alpha, _dt, elapsed)
+		-- Find which step `elapsed` falls into.
+		local acc = 0
+		local index = #params.Frames
+		for i, step in params.Frames do
+			acc += step.Duration
+			if elapsed < acc then
+				index = i
+				break
+			end
+		end
+		if index ~= current then
+			current = index
+			apply(index)
+		end
+		return false
+	end, function()
+		effect:Destroy()
+		if overlay then
+			overlay:Destroy()
+		end
+	end)
+	-- Safety net in case the render step never runs (e.g. window minimised).
+	Emit.cleanup(effect, total + Config.General.CleanupPadding)
+	if overlay then
+		Emit.cleanup(overlay, total + Config.General.CleanupPadding)
+	end
+end
+
+function ImpactFrame.Preset(name: string, source: Vector3?)
+	local preset = (Settings.Presets :: any)[name] :: Types.ImpactFrameParams?
+	if preset then
+		ImpactFrame.Play(preset, source)
+	else
+		warn("[VFX] Unknown impact frame preset:", name)
+	end
+end
+
+return ImpactFrame
 ]=])
 make("ModuleScript", "Lightning", i12, [=[
 --!strict
@@ -4162,6 +5833,149 @@ end
 
 return OrbitTrail
 ]=])
+make("ModuleScript", "RockRing", i12, [=[
+--!strict
+--[[
+	RockRing
+	========
+	Chunks of ground erupting upward (client only), the classic heavy-hit
+	Roblox VFX. Rocks punch up out of the floor with a Back ease, lean
+	outward, hold, then sink back down and are destroyed.
+
+	With UseGroundMaterial the rocks copy the material and colour of
+	whatever is underneath (a part's Material/Color, or the Terrain
+	material colour), so they match any map.
+
+	  RockRing.Ring(center, params)          - circle of rocks
+	  RockRing.Line(from, to, params)        - two rows along a path (slashes)
+]]
+
+local Workspace = game:GetService("Workspace")
+
+local Config = require(script.Parent.Parent.Config)
+local Emit = require(script.Parent.Emit)
+local Types = require(script.Parent.Types)
+
+local Settings = Config.RockRing
+
+local RockRing = {}
+
+type GroundLook = { Material: Enum.Material, Color: Color3 }
+
+local function groundLook(position: Vector3, params: Types.RockParams): GroundLook
+	if not params.UseGroundMaterial then
+		return { Material = params.Material, Color = params.Color }
+	end
+	local result = Emit.groundRaycast(position)
+	if result == nil then
+		return { Material = params.Material, Color = params.Color }
+	end
+	local hit = result.Instance
+	if hit:IsA("Terrain") then
+		local ok, color = pcall(function()
+			return Workspace.Terrain:GetMaterialColor(result.Material)
+		end)
+		return { Material = result.Material, Color = if ok then color else params.Color }
+	end
+	if hit:IsA("BasePart") then
+		return { Material = hit.Material, Color = hit.Color }
+	end
+	return { Material = params.Material, Color = params.Color }
+end
+
+-- Raises one rock whose final resting CFrame is `final`.
+local function raise(final: CFrame, size: Vector3, look: GroundLook, params: Types.RockParams, delayTime: number)
+	local rock = Emit.part(size, look.Color, look.Material)
+	rock.Name = "Rock"
+	local buried = final * CFrame.new(0, -size.Y * Settings.BuryDepth, 0)
+	rock.CFrame = buried
+	rock.Parent = Emit.folder()
+	Emit.cleanup(rock, delayTime + params.RiseTime + params.Hold + params.SinkTime + Config.General.CleanupPadding)
+
+	local rise = Emit.tween(
+		rock,
+		params.RiseTime,
+		{ CFrame = final },
+		Enum.EasingStyle.Back,
+		Enum.EasingDirection.Out,
+		delayTime
+	)
+	rise.Completed:Once(function(state: Enum.PlaybackState)
+		if state ~= Enum.PlaybackState.Completed or not rock.Parent then
+			return
+		end
+		Emit.tween(
+			rock,
+			params.SinkTime,
+			{ CFrame = buried, Transparency = Settings.SinkTransparency },
+			Enum.EasingStyle.Quad,
+			Enum.EasingDirection.In,
+			params.Hold
+		)
+	end)
+end
+
+local function rockSize(params: Types.RockParams): Vector3
+	local base = Emit.random(params.SizeMin, params.SizeMax)
+	return Vector3.new(
+		base * Emit.random(Settings.AspectMin, Settings.AspectMax),
+		base * Emit.random(Settings.AspectMin, Settings.AspectMax),
+		base * Emit.random(Settings.AspectMin, Settings.AspectMax)
+	)
+end
+
+local function placeRock(
+	point: Vector3,
+	outward: Vector3,
+	params: Types.RockParams,
+	delayTime: number,
+	look: GroundLook
+)
+	local ground = Emit.groundAt(point)
+	local size = rockSize(params)
+	local tilt = math.rad(Emit.random(params.TiltMin, params.TiltMax))
+	-- Face outward, lean back away from the centre, add a random twist.
+	local facing = CFrame.lookAt(ground, ground + outward)
+	local final = facing
+		* CFrame.Angles(-tilt, 0, 0)
+		* CFrame.Angles(0, Emit.random(-math.pi, math.pi), 0)
+		* CFrame.new(0, size.Y * Settings.ExposedHeight, 0)
+	raise(final, size, look, params, delayTime)
+end
+
+function RockRing.Ring(center: Vector3, params: Types.RockParams)
+	local look = groundLook(center, params)
+	local count = math.max(params.Count, 1)
+	for i = 1, count do
+		local angle = (i / count) * math.pi * 2 + Emit.random(-Settings.AngleJitter, Settings.AngleJitter)
+		local outward = Vector3.new(math.cos(angle), 0, math.sin(angle))
+		local radius = params.Radius + Emit.random(-params.RadiusJitter, params.RadiusJitter)
+		placeRock(center + outward * radius, outward, params, (i - 1) * params.Stagger, look)
+	end
+end
+
+function RockRing.Line(from: Vector3, to: Vector3, params: Types.RockParams)
+	local flat = (to - from) * Vector3.new(1, 0, 1)
+	local length = flat.Magnitude
+	if length < 1e-3 then
+		return
+	end
+	local direction = flat.Unit
+	local side = direction:Cross(Vector3.yAxis)
+	local spacing = params.Spacing or params.SizeMax
+	local look = groundLook(from, params)
+	local steps = math.max(math.floor(length / spacing), 1)
+	for i = 0, steps do
+		local along = from + direction * (i * spacing)
+		for _, sign in { 1, -1 } do
+			local offset = params.Radius + Emit.random(-params.RadiusJitter, params.RadiusJitter)
+			placeRock(along + side * sign * offset, side * sign, params, i * params.Stagger, look)
+		end
+	end
+end
+
+return RockRing
+]=])
 make("ModuleScript", "RuneCircle", i12, [=[
 --!strict
 --[[
@@ -4469,6 +6283,61 @@ end
 
 return Shockwave
 ]=])
+make("ModuleScript", "Sphere", i12, [=[
+--!strict
+--[[
+	Sphere
+	======
+	Expanding energy spheres (client only): a Ball part that swells from
+	StartSize to EndSize while fading out. Neon material reads as a solid
+	burst of light; ForceField material gives a shimmering shell. Removed by
+	Debris after its tween.
+
+	  Sphere.Burst(position, params)
+]]
+
+local Config = require(script.Parent.Parent.Config)
+local Emit = require(script.Parent.Emit)
+local Types = require(script.Parent.Types)
+
+local Sphere = {}
+
+local function burstNow(position: Vector3, params: Types.SphereParams)
+	local ball = Emit.part(Vector3.one * params.StartSize, params.Color, params.Material)
+	ball.Name = "EnergySphere"
+	ball.Shape = Enum.PartType.Ball
+	ball.Transparency = params.StartTransparency
+	ball.CFrame = CFrame.new(position)
+	ball.Parent = Emit.folder()
+	Emit.tween(
+		ball,
+		params.Duration,
+		{ Size = Vector3.one * params.EndSize },
+		Enum.EasingStyle.Quart,
+		Enum.EasingDirection.Out
+	)
+	Emit.tween(ball, params.Duration, { Transparency = 1 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	Emit.cleanup(ball, params.Duration + Config.General.CleanupPadding)
+end
+
+function Sphere.Burst(position: Vector3, params: Types.SphereParams)
+	local delayTime = params.Delay or 0
+	if delayTime > 0 then
+		task.delay(delayTime, burstNow, position, params)
+	else
+		burstNow(position, params)
+	end
+end
+
+-- Several spheres at once (e.g. a hot white core inside a dark shell).
+function Sphere.Layers(position: Vector3, layers: { Types.SphereParams })
+	for _, layer in layers do
+		Sphere.Burst(position, layer)
+	end
+end
+
+return Sphere
+]=])
 make("ModuleScript", "Types", i12, [=[
 --!strict
 --[[
@@ -4659,6 +6528,72 @@ export type RuneCircleParams = {
 	Lift: number,
 }
 
+-- One step of an anime impact-frame sequence (ImpactFrame.lua).
+export type ImpactFrameStep = {
+	Duration: number,
+	Saturation: number,
+	Contrast: number,
+	Brightness: number,
+	TintColor: Color3,
+	Overlay: Color3?, -- optional full-screen colour flash for this step
+	OverlayTransparency: number?,
+}
+
+export type ImpactFrameParams = {
+	Frames: { ImpactFrameStep },
+	MaxDistance: number, -- viewers further than this see nothing
+}
+
+-- Screen-space anime focus lines (FocusLines.lua).
+export type FocusLineParams = {
+	Count: number,
+	InnerRadius: number, -- fraction of the shorter screen side kept clear around the centre
+	LengthMin: number, -- fraction of the shorter screen side
+	LengthMax: number,
+	Thickness: number, -- pixels
+	Color: Color3,
+	Transparency: number,
+	Duration: number,
+	RerollInterval: number, -- seconds between re-randomising the lines (flicker)
+}
+
+-- Rocks erupting from the ground (RockRing.lua).
+export type RockParams = {
+	Count: number,
+	Radius: number,
+	SizeMin: number,
+	SizeMax: number,
+	TiltMin: number, -- degrees leaning outward
+	TiltMax: number,
+	RadiusJitter: number,
+	Stagger: number, -- seconds between consecutive rocks rising
+	RiseTime: number,
+	Hold: number,
+	SinkTime: number,
+	UseGroundMaterial: boolean, -- copy the material/colour of whatever is underneath
+	Color: Color3, -- fallback when no ground is found / UseGroundMaterial = false
+	Material: Enum.Material,
+	Spacing: number?, -- RockRing.Line only: studs between rocks
+}
+
+-- Expanding energy sphere (Sphere.lua).
+export type SphereParams = {
+	StartSize: number,
+	EndSize: number,
+	Duration: number,
+	Color: Color3,
+	Material: Enum.Material, -- Neon for light, ForceField for shimmering shells
+	StartTransparency: number,
+	Delay: number?,
+}
+
+-- Camera field-of-view kick (CameraShake.Punch).
+export type PunchParams = {
+	FovDelta: number, -- degrees added to the field of view at the peak
+	InTime: number,
+	OutTime: number,
+}
+
 -- Anything that can be stopped early (orbits, loops, persistent decals).
 export type Handle = {
 	Stop: () -> (),
@@ -4768,30 +6703,32 @@ end
 
 return VFXController
 ]=])
-make("Script", "SpellServer", ServerScriptService, [=[
+make("ModuleScript", "SpellService", ServerScriptService, [=[
 --!strict
 --[[
-	SpellServer
-	===========
-	Authoritative spell networking. The server never builds particles.
+	SpellService
+	============
+	Server-side spell API. The server never builds particles; it validates
+	casts and tells every client to render them.
 
-	Creates ReplicatedStorage.Remotes with two RemoteEvents:
-	  CastSpell    (client -> server)  (spellName, targetPosition)
-	  PlaySpellVFX (server -> clients) (casterUserId, spellName, origin,
-	                                    targetPosition, active?)
+	  SpellService.CastFromPlayer(player, spellName, targetPosition)
+	      Validated path used by the CastSpell remote: argument types, spell
+	      exists, caster alive, anti-spam + per-spell cooldown, MaxRange.
 
-	Validation for every cast:
-	  * argument types (string / finite Vector3)
-	  * the spell exists in Config
-	  * the caster is alive and has a HumanoidRootPart
-	  * global anti-spam interval + per-player, per-spell cooldown
-	  * target within the spell's MaxRange (+ tolerance)
+	  SpellService.CastFromModel(model, spellName, targetPosition)
+	      Trusted path for server code such as a WORLD BOSS AI. `model` is
+	      any character Model with a HumanoidRootPart (e.g. a boss rig
+	      scaled with Model:ScaleTo). No cooldowns or range checks: your
+	      boss script decides when to cast. Looping spells toggle.
 
-	Looping spells (AbyssalAura) are toggles: the server tracks whether each
-	player's loop is active and sends `active` so every client agrees. Loops
-	are stopped on death, respawn, leaving, or after MaxDuration.
+	  SpellService.StopLoops(caster)   -- Player or Model
 
-	Handlers never yield (task.delay only schedules work).
+	PlaySpellVFX is fired to all clients with
+	  (caster, spellName, origin, targetPosition, active?)
+	where `caster` is the player's UserId (number) or the boss Model itself.
+
+	Loops stop automatically on death, respawn, leaving, the model being
+	removed, or after the spell's MaxDuration. Nothing here yields.
 ]]
 
 local Players = game:GetService("Players")
@@ -4800,6 +6737,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Config = require(ReplicatedStorage.VFX.Config)
 
 local Network = Config.Network
+
+local SpellService = {}
 
 ---------------------------------------------------------------------------
 -- Remotes (created at runtime)
@@ -4815,7 +6754,8 @@ local function ensureFolder(): Folder
 	return folder
 end
 
-local function ensureRemote(folder: Folder, name: string): RemoteEvent
+function SpellService.EnsureRemote(name: string): RemoteEvent
+	local folder = ensureFolder()
 	local existing = folder:FindFirstChild(name)
 	if existing and existing:IsA("RemoteEvent") then
 		return existing
@@ -4826,30 +6766,28 @@ local function ensureRemote(folder: Folder, name: string): RemoteEvent
 	return remote
 end
 
-local remotes = ensureFolder()
-local castRemote = ensureRemote(remotes, Network.CastRemote)
-local playRemote = ensureRemote(remotes, Network.PlayRemote)
+local castRemote = SpellService.EnsureRemote(Network.CastRemote)
+local playRemote = SpellService.EnsureRemote(Network.PlayRemote)
 
 ---------------------------------------------------------------------------
--- Per-player state
+-- State. Casters are keyed by Player (player casts) or Model (NPC casts).
 ---------------------------------------------------------------------------
-type PlayerState = {
+type CasterState = {
 	LastCast: number,
 	ReadyAt: { [string]: number },
-	-- spellName -> token of the active loop (nil when not active)
-	ActiveLoops: { [string]: number },
+	ActiveLoops: { [string]: number }, -- spellName -> loop token
 }
 
-local states: { [Player]: PlayerState } = {}
+local states: { [Player | Model]: CasterState } = {}
 local nextToken = 0
 
-local function getState(player: Player): PlayerState
-	local existing = states[player]
+local function getState(key: Player | Model): CasterState
+	local existing = states[key]
 	if existing then
 		return existing
 	end
-	local state: PlayerState = { LastCast = -math.huge, ReadyAt = {}, ActiveLoops = {} }
-	states[player] = state
+	local state: CasterState = { LastCast = -math.huge, ReadyAt = {}, ActiveLoops = {} }
+	states[key] = state
 	return state
 end
 
@@ -4862,120 +6800,190 @@ local function isFiniteVector(v: Vector3): boolean
 	return true
 end
 
-local function aliveRoot(player: Player): BasePart?
-	local character = player.Character
-	if character == nil then
+local function rootOf(model: Model?): BasePart?
+	if model == nil then
 		return nil
 	end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if humanoid == nil or humanoid.Health <= 0 then
-		return nil
-	end
-	local root = character:FindFirstChild("HumanoidRootPart")
+	local root = model:FindFirstChild("HumanoidRootPart")
 	if root and root:IsA("BasePart") then
 		return root
 	end
 	return nil
 end
 
--- Ends every active loop for a player and tells all clients.
-local function stopLoops(player: Player)
-	local state = states[player]
+local function isAlive(model: Model): boolean
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	return humanoid == nil or humanoid.Health > 0
+end
+
+-- What clients receive as the caster: UserId for players, the Model for NPCs.
+local function wireCaster(key: Player | Model): number | Model
+	if typeof(key) == "Instance" and key:IsA("Player") then
+		return key.UserId
+	end
+	return key :: Model
+end
+
+local function characterOf(key: Player | Model): Model?
+	if typeof(key) == "Instance" and key:IsA("Player") then
+		return key.Character
+	end
+	return key :: Model
+end
+
+function SpellService.StopLoops(key: Player | Model)
+	local state = states[key]
 	if state == nil then
 		return
 	end
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	local origin = if root and root:IsA("BasePart") then root.Position else Vector3.zero
+	local root = rootOf(characterOf(key))
+	local origin = if root then root.Position else Vector3.zero
 	for spellName in state.ActiveLoops do
 		state.ActiveLoops[spellName] = nil
-		playRemote:FireAllClients(player.UserId, spellName, origin, origin, false)
+		playRemote:FireAllClients(wireCaster(key), spellName, origin, origin, false)
 	end
 end
 
----------------------------------------------------------------------------
--- Cast handling
----------------------------------------------------------------------------
-castRemote.OnServerEvent:Connect(function(player: Player, spellName: unknown, targetPosition: unknown)
-	if typeof(spellName) ~= "string" or typeof(targetPosition) ~= "Vector3" then
-		return
-	end
-	if not isFiniteVector(targetPosition) then
-		return
-	end
-	local meta = Config.GetSpellMeta(spellName)
-	if meta == nil then
-		return
-	end
-	local root = aliveRoot(player)
-	if root == nil then
-		return
-	end
-
-	local state = getState(player)
-	local now = os.clock()
-	if now - state.LastCast < Network.GlobalCastInterval then
-		return
-	end
-	if now < (state.ReadyAt[spellName] or 0) then
-		return
-	end
-
-	local stopping = meta.Looping and state.ActiveLoops[spellName] ~= nil
-	if not stopping and (targetPosition - root.Position).Magnitude > meta.MaxRange + Network.RangeTolerance then
-		return
-	end
-
-	state.LastCast = now
-	state.ReadyAt[spellName] = now + meta.Cooldown
+-- Shared broadcast once a cast is accepted. Handles loop toggling.
+local function broadcast(key: Player | Model, meta: Config.SpellMeta, root: BasePart, targetPosition: Vector3)
+	local state = getState(key)
+	local caster = wireCaster(key)
+	local spellName = meta.Name
 	local origin = root.Position
 
 	if not meta.Looping then
-		playRemote:FireAllClients(player.UserId, spellName, origin, targetPosition)
+		playRemote:FireAllClients(caster, spellName, origin, targetPosition)
 		return
 	end
 
-	if stopping then
+	if state.ActiveLoops[spellName] ~= nil then
 		state.ActiveLoops[spellName] = nil
-		playRemote:FireAllClients(player.UserId, spellName, origin, targetPosition, false)
+		playRemote:FireAllClients(caster, spellName, origin, targetPosition, false)
 		return
 	end
 
 	nextToken += 1
 	local token = nextToken
 	state.ActiveLoops[spellName] = token
-	playRemote:FireAllClients(player.UserId, spellName, origin, targetPosition, true)
+	playRemote:FireAllClients(caster, spellName, origin, targetPosition, true)
 
 	local maxDuration = meta.MaxDuration
 	if maxDuration then
 		task.delay(maxDuration, function()
-			local current = states[player]
+			local current = states[key]
 			if current and current.ActiveLoops[spellName] == token then
 				current.ActiveLoops[spellName] = nil
 				local position = if root.Parent then root.Position else origin
-				playRemote:FireAllClients(player.UserId, spellName, position, position, false)
+				playRemote:FireAllClients(caster, spellName, position, position, false)
 			end
 		end)
 	end
-end)
+end
 
 ---------------------------------------------------------------------------
--- Lifecycle: stop loops on death / respawn, clear state on leave
+-- Player casts (validated)
 ---------------------------------------------------------------------------
-local function onCharacterAdded(player: Player, character: Model)
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
+function SpellService.CastFromPlayer(player: Player, spellName: unknown, targetPosition: unknown): boolean
+	if typeof(spellName) ~= "string" or typeof(targetPosition) ~= "Vector3" then
+		return false
+	end
+	if not isFiniteVector(targetPosition) then
+		return false
+	end
+	local meta = Config.GetSpellMeta(spellName)
+	if meta == nil then
+		return false
+	end
+	local character = player.Character
+	local root = rootOf(character)
+	if character == nil or root == nil or not isAlive(character) then
+		return false
+	end
+
+	local state = getState(player)
+	local now = os.clock()
+	if now - state.LastCast < Network.GlobalCastInterval then
+		return false
+	end
+	if now < (state.ReadyAt[spellName] or 0) then
+		return false
+	end
+	local stopping = meta.Looping and state.ActiveLoops[spellName] ~= nil
+	if not stopping and (targetPosition - root.Position).Magnitude > meta.MaxRange + Network.RangeTolerance then
+		return false
+	end
+
+	state.LastCast = now
+	state.ReadyAt[spellName] = now + meta.Cooldown
+	broadcast(player, meta, root, targetPosition)
+	return true
+end
+
+---------------------------------------------------------------------------
+-- NPC / world boss casts (trusted server code)
+---------------------------------------------------------------------------
+local watchedModels: { [Model]: boolean } = {}
+
+local function watchModel(model: Model)
+	if watchedModels[model] then
+		return
+	end
+	watchedModels[model] = true
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
 	if humanoid then
 		humanoid.Died:Once(function()
-			stopLoops(player)
+			SpellService.StopLoops(model)
 		end)
+	end
+	model.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			SpellService.StopLoops(model)
+			states[model] = nil
+			watchedModels[model] = nil
+		end
+	end)
+end
+
+function SpellService.CastFromModel(model: Model, spellName: string, targetPosition: Vector3): boolean
+	local meta = Config.GetSpellMeta(spellName)
+	local root = rootOf(model)
+	if meta == nil then
+		warn(`[SpellService] Unknown spell "{spellName}"`)
+		return false
+	end
+	if root == nil or not isAlive(model) or not isFiniteVector(targetPosition) then
+		return false
+	end
+	if not model:IsDescendantOf(workspace) then
+		warn("[SpellService] CastFromModel: the model must be in Workspace so clients can see it")
+		return false
+	end
+	watchModel(model)
+	broadcast(model, meta, root, targetPosition)
+	return true
+end
+
+---------------------------------------------------------------------------
+-- Player wiring
+---------------------------------------------------------------------------
+castRemote.OnServerEvent:Connect(function(player: Player, spellName: unknown, targetPosition: unknown)
+	SpellService.CastFromPlayer(player, spellName, targetPosition)
+end)
+
+local function onCharacterAdded(player: Player, character: Model)
+	local function hook(humanoid: Humanoid)
+		humanoid.Died:Once(function()
+			SpellService.StopLoops(player)
+		end)
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		hook(humanoid)
 	else
-		-- Humanoid not replicated yet; hook it as soon as it appears.
 		local connection: RBXScriptConnection? = nil
 		connection = character.ChildAdded:Connect(function(child: Instance)
 			if child:IsA("Humanoid") then
-				child.Died:Once(function()
-					stopLoops(player)
-				end)
+				hook(child)
 				if connection then
 					connection:Disconnect()
 				end
@@ -4989,7 +6997,7 @@ local function onPlayerAdded(player: Player)
 		onCharacterAdded(player, character)
 	end)
 	player.CharacterRemoving:Connect(function()
-		stopLoops(player)
+		SpellService.StopLoops(player)
 	end)
 	if player.Character then
 		onCharacterAdded(player, player.Character)
@@ -5000,10 +7008,108 @@ Players.PlayerAdded:Connect(onPlayerAdded)
 for _, player in Players:GetPlayers() do
 	onPlayerAdded(player)
 end
-
 Players.PlayerRemoving:Connect(function(player: Player)
-	stopLoops(player)
+	SpellService.StopLoops(player)
 	states[player] = nil
+end)
+
+return SpellService
+]=])
+make("Script", "SpellServer", ServerScriptService, [=[
+--!strict
+--[[
+	SpellServer
+	===========
+	Boots the spell networking by requiring SpellService (which creates the
+	Remotes folder, validates player casts and broadcasts PlaySpellVFX).
+
+	To make a WORLD BOSS cast from your own server code:
+
+	  local SpellService = require(game:GetService("ServerScriptService").SpellService)
+	  SpellService.CastFromModel(bossModel, "CelestialVerdict", targetPosition)
+
+	When Config.DEBUG is true this script also spawns a test boss (a black
+	R15 rig scaled by Config.Boss.DebugScale) and lets testers make it cast
+	with Shift + 1-8 (see VFXTestBinds.client.lua).
+]]
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
+local Workspace = game:GetService("Workspace")
+
+local Config = require(ReplicatedStorage.VFX.Config)
+local SpellService = require(ServerScriptService.SpellService)
+
+if not Config.DEBUG then
+	return
+end
+
+---------------------------------------------------------------------------
+-- Debug test boss
+---------------------------------------------------------------------------
+local Boss = Config.Boss
+local debugRemote = SpellService.EnsureRemote(Boss.DebugRemote)
+local boss: Model? = nil
+local lastDebugCast: { [Player]: number } = {}
+Players.PlayerRemoving:Connect(function(player: Player)
+	lastDebugCast[player] = nil
+end)
+
+local function spawnBoss(): Model?
+	local description = Instance.new("HumanoidDescription")
+	for _, property in { "HeadColor", "TorsoColor", "LeftArmColor", "RightArmColor", "LeftLegColor", "RightLegColor" } do
+		(description :: any)[property] = Boss.DebugColor
+	end
+	local ok, model = pcall(function()
+		return Players:CreateHumanoidModelFromDescription(description, Enum.HumanoidRigType.R15)
+	end)
+	if not ok or model == nil then
+		warn("[SpellServer] Could not create the debug boss:", model)
+		return nil
+	end
+	model.Name = Boss.DebugName
+	model:ScaleTo(Boss.DebugScale)
+	local humanoid = model:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		humanoid.MaxHealth = math.huge
+		humanoid.Health = math.huge
+	end
+	model:PivotTo(CFrame.new(Boss.DebugPosition))
+	model.Parent = Workspace
+	return model
+end
+
+-- Spawning yields (CreateHumanoidModelFromDescription), so run it in its own thread.
+task.spawn(function()
+	boss = spawnBoss()
+end)
+
+debugRemote.OnServerEvent:Connect(function(player: Player, spellName: unknown)
+	local current = boss
+	if typeof(spellName) ~= "string" or current == nil or current.Parent == nil then
+		return
+	end
+	local now = os.clock()
+	if now - (lastDebugCast[player] or -math.huge) < Boss.DebugCastInterval then
+		return
+	end
+	lastDebugCast[player] = now
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if root == nil or not root:IsA("BasePart") then
+		return
+	end
+	-- The boss turns to face the player and casts at them.
+	local bossRoot = current:FindFirstChild("HumanoidRootPart")
+	if bossRoot and bossRoot:IsA("BasePart") then
+		local flatTarget = Vector3.new(root.Position.X, bossRoot.Position.Y, root.Position.Z)
+		if (flatTarget - bossRoot.Position).Magnitude > 1e-3 then
+			current:PivotTo(CFrame.lookAt(bossRoot.Position, flatTarget))
+		end
+	end
+	SpellService.CastFromModel(current, spellName, root.Position)
 end)
 ]=])
 make("LocalScript", "SpellClient", StarterPlayerScripts, [=[
@@ -5015,7 +7121,9 @@ make("LocalScript", "SpellClient", StarterPlayerScripts, [=[
 	locally through VFXController. Every client (including the caster)
 	renders every cast, so all players see the same spell.
 
-	PlaySpellVFX args: (casterUserId, spellName, origin, targetPosition, active?)
+	PlaySpellVFX args: (caster, spellName, origin, targetPosition, active?)
+	`caster` is a player's UserId, or the boss Model itself for NPC casts
+	(SpellService.CastFromModel).
 	`origin` is the caster's position on the server at cast time; it is used
 	as the target fallback when a loop-stop arrives without one.
 
@@ -5035,12 +7143,17 @@ local remotes = ReplicatedStorage:WaitForChild(Network.Folder)
 local playRemote = remotes:WaitForChild(Network.PlayRemote) :: RemoteEvent
 
 playRemote.OnClientEvent:Connect(
-	function(casterUserId: number, spellName: string, origin: Vector3, targetPosition: Vector3?, active: boolean?)
+	function(caster: unknown, spellName: string, origin: Vector3, targetPosition: Vector3?, active: boolean?)
 		if typeof(spellName) ~= "string" or not VFXController.Has(spellName) then
 			return
 		end
-		local caster = Players:GetPlayerByUserId(casterUserId)
-		local character = caster and caster.Character
+		local character: Model? = nil
+		if typeof(caster) == "number" then
+			local player = Players:GetPlayerByUserId(caster)
+			character = player and player.Character
+		elseif typeof(caster) == "Instance" and caster:IsA("Model") then
+			character = caster -- world boss / NPC
+		end
 		if character == nil then
 			-- Caster left or their character has not streamed in; nothing to attach to.
 			return
@@ -5066,7 +7179,8 @@ make("LocalScript", "VFXTestBinds", StarterPlayerScripts, [=[
 	VFXTestBinds (debug only)
 	=========================
 	Keys 1-8 cast each spell at the mouse hit position, clamped to the
-	spell's MaxRange from Config. A small on-screen label lists the binds
+	spell's MaxRange from Config. Shift + 1-8 makes the debug world boss
+	(spawned by SpellServer) cast that spell at you instead. A small on-screen label lists the binds
 	(looping spells show [ON] while active).
 
 	Disable everything here by setting Config.DEBUG = false.
@@ -5151,7 +7265,7 @@ local function buildLabel()
 	local frame = Instance.new("Frame")
 	frame.AnchorPoint = Settings.AnchorPoint
 	frame.Position = Settings.Position
-	frame.Size = UDim2.fromOffset(Settings.Width, Settings.LineHeight * (#ordered + 1) + Settings.Padding * 2)
+	frame.Size = UDim2.fromOffset(Settings.Width, Settings.LineHeight * (#ordered + 2) + Settings.Padding * 2)
 	frame.BackgroundColor3 = Settings.BackgroundColor
 	frame.BackgroundTransparency = Settings.BackgroundTransparency
 	frame.BorderSizePixel = 0
@@ -5185,6 +7299,7 @@ local function buildLabel()
 		local keyName = UserInputService:GetStringForKeyCode(meta.Key)
 		lines[meta.Name] = addLine(`[{keyName}] {meta.DisplayName}`, index)
 	end
+	addLine(Settings.BossHint, #ordered + 1)
 end
 
 local function refreshLine(meta: Config.SpellMeta)
@@ -5226,6 +7341,15 @@ UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: 
 	local character = player.Character
 	local root = character and character:FindFirstChild("HumanoidRootPart")
 	if root == nil or not root:IsA("BasePart") then
+		return
+	end
+	local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+		or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+	if shift then
+		local bossRemote = remotes:FindFirstChild(Config.Boss.DebugRemote)
+		if bossRemote and bossRemote:IsA("RemoteEvent") then
+			bossRemote:FireServer(meta.Name)
+		end
 		return
 	end
 	castRemote:FireServer(meta.Name, mouseTarget(root, meta.MaxRange))
