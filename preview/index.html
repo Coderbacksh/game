@@ -1,0 +1,709 @@
+<title>Grimoire Spell Preview</title>
+<style>
+/* Layout: full-width "viewport" canvas on top, spell picker + timeline notes below. Single dark look (game HUD). */
+:root {
+  --bg: #0b0b0e;
+  --panel: #15151a;
+  --line: #2a2a33;
+  --fg: #ecedf2;
+  --muted: #9a9ba8;
+  --white: #ffffff;
+  --crimson: #d7122a;
+  --cyan: #bee6ff;
+  --display: "Cinzel", "Trajan Pro", Georgia, serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { background: var(--bg); color: var(--fg); }
+body { font-family: var(--body); font-size: 15px; line-height: 1.5; padding-inline: 16px; padding-block: 20px 40px; }
+.wrap { max-width: 1180px; margin-inline: auto; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(22px, 3.2vw, 34px); letter-spacing: 0.04em; margin: 0; text-wrap: balance; }
+.badge { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); padding: 4px 10px; border-radius: 3px; }
+.stage { position: relative; width: 100%; aspect-ratio: 16 / 9; max-width: 100%; background: #000; border: 1px solid var(--line); overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; }
+.hud { position: absolute; left: 12px; bottom: 12px; font-family: var(--mono); font-size: 12px; background: rgba(8, 8, 10, 0.65); color: var(--fg); padding: 8px 10px; line-height: 1.55; pointer-events: none; }
+.hud b { color: var(--white); font-weight: 600; }
+.hud .on { color: var(--white); }
+.spellname { position: absolute; right: 14px; top: 12px; font-family: var(--display); font-size: clamp(14px, 2.2vw, 22px); letter-spacing: 0.08em; color: var(--white); text-shadow: 0 0 12px rgba(255,255,255,0.5); pointer-events: none; }
+.picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+.picker button { font: inherit; font-size: 13px; text-align: left; background: var(--panel); color: var(--fg); border: 1px solid var(--line); padding: 8px 10px; border-radius: 3px; cursor: pointer; display: grid; gap: 2px; }
+.picker button:hover { border-color: var(--muted); }
+.picker button:focus-visible { outline: 2px solid var(--white); outline-offset: 2px; }
+.picker button[aria-pressed="true"] { border-color: var(--white); background: #1e1e25; }
+.picker .key { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; color: var(--muted); font-size: 13px; }
+.controls label { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.notes { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 24px; }
+@media (max-width: 760px) { .notes { grid-template-columns: minmax(0, 1fr); } }
+.notes h2 { font-family: var(--display); font-size: 18px; letter-spacing: 0.05em; margin: 0 0 6px; }
+.notes p { margin: 0 0 10px; max-width: 65ch; color: var(--fg); }
+.timeline { font-family: var(--mono); font-size: 12.5px; color: var(--muted); list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-variant-numeric: tabular-nums; }
+.timeline li span { color: var(--white); display: inline-block; min-width: 5.5ch; }
+.caveat { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; max-width: 80ch; }
+@media (prefers-reduced-motion: reduce) { .picker button { transition: none; } }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+
+<div class="wrap">
+  <header>
+    <h1>Life of Grimoire &middot; Spell VFX</h1>
+    <span class="badge">Concept mockup &middot; not an in-engine capture</span>
+  </header>
+
+  <div class="stage" id="stage">
+    <canvas id="view" aria-label="Animated preview of the selected spell"></canvas>
+    <div class="spellname" id="spellname"></div>
+    <div class="hud" id="hud"></div>
+  </div>
+
+  <div class="picker" id="picker" role="group" aria-label="Spells"></div>
+
+  <div class="controls">
+    <label><input type="checkbox" id="auto" checked> Cycle through all spells</label>
+    <span>Press <b>1</b>&ndash;<b>8</b> to cast, like the in-game test binds. Press <b>3</b> again to stop the aura.</span>
+  </div>
+
+  <div class="notes">
+    <div>
+      <h2 id="ntitle"></h2>
+      <p id="ndesc"></p>
+    </div>
+    <div>
+      <h2>Timeline (from Config.lua)</h2>
+      <ul class="timeline" id="ntime"></ul>
+    </div>
+  </div>
+
+  <p class="caveat">This page re-creates each spell's timeline, colours and particle counts from <code>Config.lua</code> on a 2D canvas, so you can judge the composition and pacing. Real Roblox rendering differs: particle textures come from your <code>Config.Textures</code> uploads, lighting and bloom depend on your place, and Beams and Trails look sharper in-engine. For true screenshots, install the VFX in Studio and press F12 (or use the Studio screenshot tool) while casting.</p>
+</div>
+
+<script>
+(() => {
+"use strict";
+const canvas = document.getElementById("view");
+const ctx = canvas.getContext("2d");
+const stage = document.getElementById("stage");
+let W = 1280, H = 720, DPR = 1;
+function resize() {
+  const r = stage.getBoundingClientRect();
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.max(320, r.width); H = Math.max(180, r.height);
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener("resize", resize); resize();
+
+// ---------- tiny 3D math ----------
+const v = (x, y, z) => [x, y, z];
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len = a => Math.hypot(a[0], a[1], a[2]);
+const norm = a => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerpV = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
+const rnd = (a, b) => a + Math.random() * (b - a);
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const easeOut3 = t => 1 - Math.pow(1 - t, 3);
+const randUnit = () => { const z = rnd(-1, 1), a = rnd(0, Math.PI * 2), r = Math.sqrt(1 - z * z); return [r * Math.cos(a), z, r * Math.sin(a)]; };
+
+const cam = { pos: v(7, 9, -17), look: v(0, 3, 12), fov: 58, f: [0,0,1], r: [1,0,0], u: [0,1,0], focal: 600 };
+let camTarget = null;
+function setCamera(c, instant) { camTarget = c; if (instant) { cam.pos = c.pos.slice(); cam.look = c.look.slice(); } }
+function updateCamera(dt) {
+  if (camTarget) { const k = 1 - Math.exp(-dt * 3); cam.pos = lerpV(cam.pos, camTarget.pos, k); cam.look = lerpV(cam.look, camTarget.look, k); }
+  cam.f = norm(sub(cam.look, cam.pos)); cam.r = norm(cross([0, 1, 0], cam.f)); cam.u = cross(cam.f, cam.r);
+  cam.focal = (H / 2) / Math.tan((cam.fov * Math.PI / 180) / 2);
+}
+let shakeX = 0, shakeY = 0;
+function proj(p) {
+  const d = sub(p, cam.pos); const z = dot(d, cam.f);
+  if (z < 0.6) return null;
+  const s = cam.focal / z;
+  return { x: W / 2 + dot(d, cam.r) * s + shakeX, y: H / 2 - dot(d, cam.u) * s + shakeY, s, z };
+}
+
+// ---------- palette (Config.Palette) ----------
+const C = {
+  black: "5,5,8", ink: "14,14,18", smoke: "28,28,34", grey: "120,120,128", white: "255,255,255",
+  glow: "236,242,255", crimson: "110,0,14", crimsonB: "215,18,36", cyan: "190,238,255", ice: "150,215,240",
+};
+
+// ---------- world state ----------
+let parts = [], fx = [], timers = [], now = 0, dim = 0, dimTarget = 0, screenFlash = 0;
+let shakes = [];
+const char = { pos: v(0, 0, 0) };
+const TARGET = v(0, 0, 24);
+
+function at(delay, fn) { timers.push({ t: now + delay, fn }); }
+function reset() { parts = []; fx = []; timers = []; shakes = []; dimTarget = 0; screenFlash = 0; auraActive = false; }
+
+// particles: kind ink|glow ; color rgb string
+function emit(n, o) {
+  for (let i = 0; i < n; i++) {
+    const pos = typeof o.pos === "function" ? o.pos(i) : o.pos.slice();
+    const vel = typeof o.vel === "function" ? o.vel(pos, i) : (o.vel ? o.vel.slice() : [0, 0, 0]);
+    parts.push({ pos, vel, age: 0, life: rnd(o.life[0], o.life[1]), s0: o.size[0], s1: o.size[1], kind: o.kind || "glow",
+      color: o.color || C.white, alpha: o.alpha ?? 1, drag: o.drag || 0, acc: o.acc || [0, 0, 0], streak: o.streak || 0, fadeIn: o.fadeIn || 0 });
+  }
+}
+function shake(mag, dur) { shakes.push({ mag, dur, t: 0, seed: Math.random() * 100 }); }
+const SHAKE = { Light: [0.25, 0.35], Medium: [0.55, 0.5], Heavy: [1.1, 0.9], Ultimate: [2.2, 1.6] };
+const FLASH = {
+  Small: { light: 6, range: 18, streakW: 14, streakH: 0.8, dur: 0.25, screen: 0.15 },
+  Medium: { light: 10, range: 30, streakW: 34, streakH: 1.6, dur: 0.35, screen: 0.3 },
+  Large: { light: 16, range: 50, streakW: 60, streakH: 2.4, dur: 0.45, screen: 0.55 },
+  Ultimate: { light: 24, range: 90, streakW: 140, streakH: 4, dur: 0.7, screen: 0.85 },
+};
+function flash(pos, name) {
+  const p = FLASH[name];
+  screenFlash = Math.max(screenFlash, p.screen);
+  fx.push({ dur: p.dur * 1.6, layer: 3, draw(k) { // light bloom
+    const q = proj(pos); if (!q) return;
+    const r = p.range * q.s * 0.55 * (1 - k * 0.3);
+    const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r);
+    g.addColorStop(0, `rgba(255,255,255,${0.85 * (1 - k)})`); g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g; ctx.fillRect(q.x - r, q.y - r, r * 2, r * 2);
+  }});
+  fx.push({ dur: p.dur, layer: 4, draw(k) { // horizontal lens-flare streak (screen-flat, like the BillboardGui)
+    const q = proj(pos); if (!q) return;
+    const w = p.streakW * q.s * lerp(0.3, 1, easeOut3(k)); const h = Math.max(1.5, p.streakH * q.s * (1 - k));
+    const g = ctx.createLinearGradient(q.x - w / 2, 0, q.x + w / 2, 0);
+    g.addColorStop(0, "rgba(255,255,255,0)"); g.addColorStop(0.2, `rgba(255,255,255,${0.45 * (1 - k)})`);
+    g.addColorStop(0.5, `rgba(255,255,255,${1 - k})`); g.addColorStop(0.8, `rgba(255,255,255,${0.45 * (1 - k)})`); g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(q.x, q.y, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(255,255,255,${1 - k})`; ctx.fillRect(q.x - w * 0.3, q.y - h * 0.12, w * 0.6, Math.max(1, h * 0.24));
+  }});
+}
+function coreFlare(pos, count, size = 16) {
+  for (let i = 0; i < count; i++) fx.push({ dur: 0.42, layer: 3, draw(k) {
+    const q = proj(pos); if (!q) return; const r = lerp(2, size, easeOut3(Math.min(1, k / 0.15))) * q.s * 0.5;
+    const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r);
+    g.addColorStop(0, `rgba(255,255,255,${1 - k})`); g.addColorStop(0.35, `rgba(255,255,255,${0.6 * (1 - k)})`); g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g; ctx.fillRect(q.x - r, q.y - r, r * 2, r * 2);
+  }});
+}
+const sparksSpec = (pos, n, speed = [30, 70]) => emit(n, { pos, vel: () => mul(randUnit(), rnd(speed[0], speed[1])), life: [0.25, 0.6], size: [0.6, 0], drag: 6, streak: 2.5 });
+const inkSmoke = (pos, n, speed = [4, 10], size = [1.5, 5]) => emit(n, { pos: () => add(pos, mul(randUnit(), 0.5)), vel: () => mul(randUnit(), rnd(speed[0], speed[1])), life: [0.6, 1.1], size, kind: "ink", color: C.black, drag: 3 });
+
+// polyline bolt with flicker (Lightning.lua)
+function bolt(getEnds, o) {
+  const seg = o.seg, total = o.dur + (o.fade || 0);
+  let pts = [], branches = [], acc = 1e9;
+  function rebuild(age) {
+    const [a, b] = getEnds(age); const d = sub(b, a); const dir = norm(d);
+    const ref = Math.abs(dir[1]) > 0.99 ? [1, 0, 0] : [0, 1, 0]; const u = norm(cross(dir, ref)), w = cross(dir, u);
+    pts = [];
+    for (let i = 0; i <= seg; i++) { const t = i / seg, e = Math.sin(Math.PI * t) * o.amp; pts.push(add(lerpV(a, b, t), add(mul(u, rnd(-1, 1) * e), mul(w, rnd(-1, 1) * e)))); }
+    branches = [];
+    if (o.branches) for (let j = 0; j < o.branches; j++) {
+      const s = pts[1 + Math.floor(Math.random() * (seg - 1))]; const bd = norm(add(dir, mul(randUnit(), 0.8))); const L = len(d) * 0.3; const bp = [];
+      for (let i = 0; i <= 5; i++) { const t = i / 5; bp.push(add(add(s, mul(bd, L * t)), mul(randUnit(), Math.sin(Math.PI * t) * 1.5))); }
+      branches.push(bp);
+    }
+  }
+  fx.push({ dur: total, layer: o.ink ? 1 : 3, update(dt, age) { acc += dt; if (acc >= o.flicker) { acc = 0; rebuild(age); } },
+    draw(k, age) {
+      const fade = age > o.dur ? clamp((age - o.dur) / (o.fade || 1e-3), 0, 1) : 0;
+      const alpha = (o.alpha ?? 1) * (1 - fade);
+      const drawLine = (P, wScale) => {
+        for (let i = 0; i < P.length - 1; i++) {
+          const q0 = proj(P[i]), q1 = proj(P[i + 1]); if (!q0 || !q1) continue;
+          const t = i / (P.length - 1); const wd = Math.max(0.8, o.width * wScale * lerp(1, o.end ?? 1, t) * (1 - fade) * (q0.s + q1.s) / 2);
+          ctx.lineWidth = wd; ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke();
+        }
+      };
+      ctx.lineCap = "round";
+      if (o.ink) { ctx.strokeStyle = `rgba(${C.black},${0.92 * alpha})`; drawLine(pts, 1); return; }
+      ctx.lineCap = "butt"; ctx.lineJoin = "round";
+      if (o.alpha === undefined) { ctx.strokeStyle = `rgba(${o.color || C.glow},${0.22 * alpha})`; drawLine(pts, 3.2); }
+      if (o.alpha !== undefined) { // soft wide glow: one continuous path so joints don't show
+        const Q = pts.map(proj); if (Q.some(x => !x)) return; const mid = Q[Math.floor(Q.length / 2)];
+        ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = Math.max(1, o.width * (1 - fade) * mid.s);
+        ctx.strokeStyle = `rgba(${o.color || C.glow},${alpha})`; ctx.beginPath(); Q.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.stroke(); return;
+      }
+      ctx.lineCap = "round";
+      ctx.strokeStyle = `rgba(255,255,255,${alpha})`; drawLine(pts, 1);
+      branches.forEach(b => { ctx.strokeStyle = `rgba(255,255,255,${0.8 * alpha})`; drawLine(b, 0.35); });
+    }});
+}
+const crackle = (center, radius, count, o) => { for (let i = 0; i < count; i++) bolt(() => [add(center, mul(randUnit(), radius * rnd(0.3, 1))), add(center, mul(randUnit(), radius * rnd(0.3, 1)))], o); };
+
+// expanding ring (Shockwave.lua) — tilt as rotation matrix rows
+function ring(center, o) {
+  const tilt = o.tilt || null;
+  fx.push({ delay: o.delay || 0, dur: o.dur, layer: o.ink ? 1 : 3, draw(k) {
+    const r = lerp(o.r0, o.r1, easeOut3(k)); const span = o.span || Math.PI * 2; const n = o.seg || 40;
+    const wd = o.width * (1 - easeOut3(k)); const a = 1 - k * k;
+    ctx.lineCap = "round";
+    for (let i = 0; i < n; i++) {
+      const a0 = -span / 2 + span * i / n, a1 = -span / 2 + span * (i + 1) / n;
+      let p0 = [Math.cos(a0) * r, 0, Math.sin(a0) * r], p1 = [Math.cos(a1) * r, 0, Math.sin(a1) * r];
+      if (tilt) { p0 = tilt(p0); p1 = tilt(p1); }
+      const q0 = proj(add(center, p0)), q1 = proj(add(center, p1)); if (!q0 || !q1) continue;
+      const taper = o.span ? Math.sin(Math.PI * (i + 0.5) / n) : 1;
+      ctx.lineWidth = Math.max(0.6, wd * taper * q0.s);
+      ctx.strokeStyle = o.ink ? `rgba(${C.black},${0.95 * a})` : `rgba(255,255,255,${a})`;
+      ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke();
+    }
+  }});
+}
+const rotXZ = (rx, ry, rz) => p => { // rotate by X, then Y, then Z
+  let [x, y, z] = p; let c = Math.cos(rx), s = Math.sin(rx); [y, z] = [y * c - z * s, y * s + z * c];
+  c = Math.cos(ry); s = Math.sin(ry); [x, z] = [x * c + z * s, -x * s + z * c];
+  c = Math.cos(rz); s = Math.sin(rz); [x, y] = [x * c - y * s, x * s + y * c]; return [x, y, z];
+};
+
+// crack decal (GroundDecal.lua procedural cracks)
+function cracks(center, o) {
+  const lines = [];
+  const jag = (start, dir, L, segs) => { const side = [-dir[2], 0, dir[0]]; let prev = start; const step = L / segs; const out = [];
+    for (let i = 1; i <= segs; i++) { const j = i === segs ? 0 : rnd(-o.jitter, o.jitter) * step; const p = add(add(start, mul(dir, step * i)), mul(side, j)); out.push([prev, p, step * i]); prev = p; } return out; };
+  if (o.pattern === "slash") {
+    const f = o.forward, half = o.length / 2;
+    lines.push(...jag(add(center, mul(f, -half)), f, o.length, o.segs));
+    for (let i = 0; i < o.count; i++) { const z = rnd(-half, half), sgn = Math.random() < 0.5 ? 1 : -1, ang = rnd(0.3, 1.1) * sgn;
+      const side = [-f[2], 0, f[0]]; const d = norm(add(mul(f, Math.cos(ang)), mul(side, Math.sin(ang))));
+      lines.push(...jag(add(center, mul(f, z)), d, o.radius, 3)); }
+  } else for (let i = 0; i < o.count; i++) {
+    let ang = i / o.count * Math.PI * 2; if (o.pattern !== "star") ang += rnd(-0.5, 0.5) * Math.PI * 2 / o.count;
+    const d = [Math.cos(ang), 0, Math.sin(ang)];
+    lines.push(...jag(center, d, o.pattern === "star" ? o.radius : o.radius * rnd(0.6, 1), o.segs));
+    if (o.pattern === "star") { const b = ang + Math.PI / o.count; lines.push(...jag(center, [Math.cos(b), 0, Math.sin(b)], o.radius * 0.45, 2)); }
+  }
+  const total = o.spread + o.hold + o.fade;
+  fx.push({ dur: total, layer: 0, draw(k, age) {
+    const fadeA = age > o.spread + o.hold ? 1 - (age - o.spread - o.hold) / o.fade : 1;
+    // dark scorch disc
+    const q = proj(add(center, [0, 0.02, 0])); if (q) { ctx.save(); ctx.translate(q.x, q.y);
+      const rr = o.radius * q.s * lerp(0.3, 1, easeOut3(clamp(age / o.spread, 0, 1)));
+      const sq = Math.abs(dot(norm(sub(cam.pos, center)), [0, 1, 0])) + 0.15; ctx.scale(1, Math.min(1, sq));
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rr); g.addColorStop(0, `rgba(${C.black},${0.45 * fadeA})`); g.addColorStop(1, `rgba(${C.black},0)`);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, rr, 0, Math.PI * 2); ctx.fill(); ctx.restore(); }
+    ctx.lineCap = "round";
+    for (const [a, b, dist] of lines) {
+      if (age < dist * 0.012) continue;
+      const q0 = proj(add(a, [0, 0.03, 0])), q1 = proj(add(b, [0, 0.03, 0])); if (!q0 || !q1) continue;
+      ctx.lineWidth = Math.max(0.8, o.thick * q0.s * (o.glow ? 1 : 1.3));
+      ctx.strokeStyle = `rgba(${o.color},${fadeA})`;
+      ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke();
+      if (o.glow) { ctx.globalCompositeOperation = "lighter"; ctx.lineWidth *= 3; ctx.strokeStyle = `rgba(${o.color},${0.25 * fadeA})`; ctx.stroke(); ctx.globalCompositeOperation = "source-over"; }
+    }
+  }});
+}
+
+// floating shards (Debris.lua)
+function shards(center, o) {
+  for (let i = 0; i < o.count; i++) {
+    const ang = rnd(0, Math.PI * 2), dist = rnd(0, o.radius), out = [Math.cos(ang), 0, Math.sin(ang)];
+    const start = add(add(center, mul(out, dist)), [0, 0.5, 0]);
+    const rise = add(add(start, [0, rnd(o.rise[0], o.rise[1]), 0]), mul(out, o.spread || 1.5));
+    const hang = add(rise, [0, o.drift || 0.3, 0]); const fall = add(add(hang, [0, -o.fallDist, 0]), mul(out, 1));
+    const sz = rnd(o.size[0], o.size[1]); const spin = rnd(-6, 6), rot0 = rnd(0, 6);
+    const T = o.riseT + o.hangT + o.fallT;
+    fx.push({ dur: T, layer: 2, draw(k, age) {
+      let p, a = 1;
+      if (age < o.riseT) p = lerpV(start, rise, 1 - Math.pow(1 - age / o.riseT, 4));
+      else if (age < o.riseT + o.hangT) p = lerpV(rise, hang, (1 - Math.cos(Math.PI * (age - o.riseT) / o.hangT)) / 2);
+      else { const t = (age - o.riseT - o.hangT) / o.fallT; p = lerpV(hang, fall, t * t); a = 1 - t; }
+      const q = proj(p); if (!q) return; const r = sz * q.s; const rot = rot0 + spin * age;
+      ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(rot);
+      ctx.fillStyle = `rgba(${o.color || C.ink},${a})`; ctx.strokeStyle = `rgba(255,255,255,${0.25 * a})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r * 0.6, r * 0.2); ctx.lineTo(-r * 0.2, r * 0.7); ctx.lineTo(-r * 0.6, -r * 0.1); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }});
+  }
+}
+
+// rune seal (RuneCircle.lua)
+function runeCircle(center, o) {
+  const segs = [];
+  const C1 = (r, a) => [Math.cos(a) * r, 0, Math.sin(a) * r];
+  const N = 40, inner = o.radius * o.inner;
+  for (let i = 0; i < N; i++) { const a = i / N * Math.PI * 2, b = (i + 1) / N * Math.PI * 2, f = i / N;
+    segs.push([C1(o.radius, a), C1(o.radius, b), lerp(0, 0.45, f)]); segs.push([C1(inner, a), C1(inner, b), lerp(0.15, 0.6, f)]); }
+  for (let k = 0; k < o.points; k++) segs.push([C1(inner, k / o.points * Math.PI * 2), C1(inner, ((k + o.step) % o.points) / o.points * Math.PI * 2), lerp(0.45, 0.85, k / o.points)]);
+  for (let t = 0; t < o.ticks; t++) { const a = t / o.ticks * Math.PI * 2; segs.push([C1(o.radius, a), C1(o.radius - o.tick, a), lerp(0.6, 1, t / o.ticks)]); }
+  const drawD = o.draw * 0.25, total = o.draw + o.hold + o.fade;
+  fx.push({ dur: total, layer: o.ground ? 0.5 : 3, draw(k, age) {
+    const rot = age * o.rotSpeed; const c = Math.cos(rot), s = Math.sin(rot);
+    const R = p => [p[0] * c - p[2] * s, p[1], p[0] * s + p[2] * c];
+    const fade = age > o.draw + o.hold ? 1 - (age - o.draw - o.hold) / o.fade : 1;
+    ctx.lineCap = "round";
+    ctx.globalCompositeOperation = "lighter";
+    for (const [a, b, st] of segs) {
+      const t = clamp((age - st * (o.draw - drawD)) / drawD, 0, 1); if (t <= 0) continue;
+      const q0 = proj(add(center, R(a))), q1 = proj(add(center, R(lerpV(a, b, t)))); if (!q0 || !q1) continue;
+      ctx.lineWidth = Math.max(1, o.width * q0.s * 2.6); ctx.strokeStyle = `rgba(${C.glow},${0.18 * fade})`;
+      ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke();
+      ctx.lineWidth = Math.max(0.8, o.width * q0.s); ctx.strokeStyle = `rgba(255,255,255,${fade})`; ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }});
+}
+
+// orbit trails (OrbitTrail.lua) — keeps a short history and strokes it
+function orbitTrail(getCenter, o) {
+  const hist = []; let ang = o.phase, h = o.height || 0;
+  const tilt = rotXZ(o.tilt[0] * Math.PI / 180, o.tilt[1] * Math.PI / 180, o.tilt[2] * Math.PI / 180);
+  const obj = { dur: o.dur ?? 1e9, layer: o.ink ? 1 : 3, stopped: false,
+    update(dt) { const c = getCenter(); if (!c || obj.stopped) { hist.length && hist.shift(); if (!hist.length && obj.stopped) obj.dur = 0; return; }
+      ang += o.speed * dt; h += (o.rise || 0) * dt;
+      const local = tilt([Math.cos(ang) * o.radius, 0, Math.sin(ang) * o.radius]);
+      hist.push({ p: add(add(c, [0, h, 0]), local), t: now }); while (hist.length && now - hist[0].t > o.life) hist.shift(); },
+    draw() {
+      ctx.lineCap = "butt"; ctx.lineJoin = "round";
+      for (let i = 0; i < hist.length - 1; i++) { const q0 = proj(hist[i].p), q1 = proj(hist[i + 1].p); if (!q0 || !q1) continue;
+        const a = i / hist.length; ctx.lineWidth = Math.max(0.8, o.width * q0.s);
+        ctx.strokeStyle = o.ink ? `rgba(${C.black},${0.9 * a})` : `rgba(255,255,255,${a})`;
+        ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke(); }
+    }};
+  fx.push(obj); return obj;
+}
+function custom(o) { fx.push(o); return o; }
+
+// ---------- character ----------
+function drawCharacter() {
+  const p = char.pos; const q = proj(add(p, [0, 2.5, 0])); if (!q) return;
+  const s = q.s; ctx.save(); ctx.translate(q.x, q.y);
+  ctx.fillStyle = "#1c1c22"; ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1;
+  const box = (x, y, w, h) => { ctx.fillRect(x * s, y * s, w * s, h * s); ctx.strokeRect(x * s, y * s, w * s, h * s); };
+  box(-1, -1.0, 2, 2);       // torso
+  box(-0.6, -2.2, 1.2, 1.15); // head
+  box(-1.55, -1.0, 0.5, 1.9); box(1.05, -1.0, 0.5, 1.9); // arms
+  box(-0.95, 1.0, 0.9, 2); box(0.05, 1.0, 0.9, 2); // legs
+  ctx.restore();
+  const g = proj(p); if (g) { ctx.fillStyle = "rgba(0,0,0,0.35)"; ctx.beginPath(); ctx.ellipse(g.x, g.y, 1.6 * g.s, 0.5 * g.s, 0, 0, Math.PI * 2); ctx.fill(); }
+}
+
+// ---------- environment ----------
+function drawWorld() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#3a3e48"); sky.addColorStop(0.55, "#575b64"); sky.addColorStop(1, "#5f6168");
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  // baseplate
+  const corners = [[-90, 0, -40], [90, 0, -40], [90, 0, 140], [-90, 0, 140]].map(proj);
+  ctx.fillStyle = "#6a6c71";
+  if (corners.every(Boolean)) { ctx.beginPath(); corners.forEach((c, i) => i ? ctx.lineTo(c.x, c.y) : ctx.moveTo(c.x, c.y)); ctx.closePath(); ctx.fill(); }
+  else { const h = proj([0, 0, 140]); ctx.fillRect(0, h ? h.y : H * 0.45, W, H); }
+  ctx.strokeStyle = "rgba(0,0,0,0.12)"; ctx.lineWidth = 1;
+  for (let x = -88; x <= 88; x += 4) { const a = proj([x, 0, -8]), b = proj([x, 0, 140]); if (a && b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); } }
+  for (let z = -8; z <= 140; z += 4) { const a = proj([-88, 0, z]), b = proj([88, 0, z]); if (a && b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); } }
+}
+
+// ---------- spells (timelines mirror Spells/*.lua + Config.lua) ----------
+let auraActive = false, auraStop = null;
+const CAM_DEFAULT = { pos: v(9, 9, -16), look: v(0, 3, 12) };
+const SPELLS = [
+{ id: "GrimoireAwakening", key: "1", name: "Grimoire Awakening", cam: { pos: v(6, 6, -13), look: v(0.6, 3.4, 0) },
+  desc: "Black ink pages spiral in and snap into a floating book above the open hand. White runes etch across the cover as flickering electric lines, the cover flips open with a white flash, then a ring of glyph tiles spins at waist height while two white trails orbit for 2 seconds. The open book settles into a faint idle glow.",
+  time: [["0.00", "ink wisps + 10 pages spiral in (0.9 s)"], ["0.90", "book snaps together (x1.15 pop)"], ["1.02", "8 rune lines etch, 0.07 s apart"], ["2.18", "cover flips open (0.3 s), Small flash"], ["2.48", "8 glyphs + 2 orbit trails (2 s)"], ["4.48", "faint idle glow (3 s), fade 0.6 s"]],
+  cast() {
+    const book = add(char.pos, [1.3, 4.2, -0.4]);
+    emit(45, { pos: () => add(book, mul(randUnit(), 4.5)), vel: p => mul(norm(sub(book, p)), rnd(5, 6)), life: [0.8, 0.9], size: [1.2, 0.2], kind: "ink", color: C.black, fadeIn: 0.2 });
+    const pages = []; for (let i = 0; i < 10; i++) pages.push({ a: i / 10 * Math.PI * 2, h: rnd(-2.5, 2.5), tum: rnd(-3, 3) });
+    let cover = 0, formed = false, glowOn = 0, bob = 0;
+    const B = custom({ dur: 8.2, layer: 2, update(dt, age) { if (age > 4.5) bob = Math.sin(age * 2.4) * 0.12; }, draw(k, age) {
+      const c = add(book, [0, bob, 0]);
+      if (age < 0.9) { const e = easeOut3(age / 0.9);
+        pages.forEach((pg, i) => { const r = 5 * (1 - e), a = pg.a + 2.5 * Math.PI * 2 * e;
+          const p = add(c, [Math.cos(a) * r, pg.h * (1 - e) + i * 0.03, Math.sin(a) * r]); const q = proj(p); if (!q) return;
+          ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(a + pg.tum * (1 - e)); ctx.fillStyle = `rgba(${C.ink},${clamp(age / 0.35, 0, 1)})`;
+          ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(-0.65 * q.s, -0.85 * q.s * 0.5, 1.3 * q.s, 1.7 * q.s * 0.5); ctx.restore(); });
+        return; }
+      const fadeOut = age > 7.6 ? 1 - (age - 7.6) / 0.6 : 1;
+      const sc = age < 1.02 ? lerp(1.15, 1, (age - 0.9) / 0.12) : 1;
+      const quad = (pts, fill, stroke) => { const Q = pts.map(p => proj(add(c, mul(p, sc)))); if (Q.some(x => !x)) return; ctx.beginPath(); Q.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); } };
+      const hx = 0.7, hz = 0.9, top = 0.18;
+      quad([[-hx, -top, -hz], [hx, -top, -hz], [hx, top, -hz], [-hx, top, -hz]], `rgba(${C.ink},${fadeOut})`);
+      quad([[-hx, top, -hz], [hx, top, -hz], [hx, top, hz], [-hx, top, hz]], `rgba(40,40,46,${fadeOut})`, `rgba(255,255,255,${0.25 * fadeOut})`);
+      const ang = cover * Math.PI; const cx = -hx + Math.cos(ang) * 2 * hx, cy = top + 0.04 + Math.sin(ang) * 2 * hx;
+      quad([[-hx, top + 0.04, -hz], [cx, cy, -hz], [cx, cy, hz], [-hx, top + 0.04, hz]], `rgba(${C.black},${fadeOut})`, `rgba(255,255,255,${0.3 * fadeOut})`);
+      if (glowOn > 0) { const q = proj(c); if (q) { const r = 8 * q.s * 0.4; const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r); g.addColorStop(0, `rgba(236,242,255,${0.35 * glowOn * fadeOut})`); g.addColorStop(1, "rgba(236,242,255,0)"); ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = g; ctx.fillRect(q.x - r, q.y - r, 2 * r, 2 * r); ctx.globalCompositeOperation = "source-over"; } }
+    }});
+    const runes = [[[-.85, -.85], [.85, -.85]], [[.85, -.85], [.85, .85]], [[.85, .85], [-.85, .85]], [[-.85, .85], [-.85, -.85]], [[0, -.6], [.5, .35]], [[.5, .35], [-.5, .35]], [[-.5, .35], [0, -.6]], [[0, .6], [0, -.2]]];
+    runes.forEach((ln, i) => at(1.02 + i * 0.07, () => bolt(() => [add(book, [ln[0][0] * 0.7, 0.24, ln[0][1] * 0.9]), add(book, [ln[1][0] * 0.7, 0.24, ln[1][1] * 0.9])], { seg: 4, amp: 0.05, width: 0.07, end: 0.6, dur: 1.16 - i * 0.07, fade: 0.2, flicker: 0.05 })));
+    at(2.18, () => custom({ dur: 0.3, update(dt, age) { cover = 1 - Math.pow(1 - age / 0.3, 2); }, draw() {} }));
+    at(2.48, () => { cover = 1; glowOn = 1; flash(book, "Small"); sparksSpec(book, 30); coreFlare(book, 1);
+      custom({ dur: 2.35, layer: 3, draw(k, age) { const fade = clamp(age / 0.35, 0, 1) * (age > 2 ? 1 - (age - 2) / 0.35 : 1);
+        for (let i = 0; i < 8; i++) { const a = age * 0.6 + i / 8 * Math.PI * 2; const p = add(char.pos, [Math.cos(a) * 4, 2.8 + Math.sin(age * 2 + i) * 0.15, Math.sin(a) * 4]); const q = proj(p); if (!q) continue;
+          const r = 0.3 * q.s; ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(Math.PI / 4); ctx.globalCompositeOperation = "lighter";
+          ctx.fillStyle = `rgba(255,255,255,${0.85 * fade})`; ctx.fillRect(-r / 2, -r / 2, r, r); ctx.fillStyle = `rgba(236,242,255,${0.2 * fade})`; ctx.fillRect(-r, -r, 2 * r, 2 * r); ctx.restore(); } } });
+      const ctr = () => add(char.pos, [0, 3, 0]);
+      orbitTrail(ctr, { radius: 3, height: 0, speed: 7, tilt: [18, 0, 0], phase: 0, width: 0.35, life: 0.35, dur: 2 });
+      orbitTrail(ctr, { radius: 3.4, height: 0.4, speed: -6, tilt: [-22, 0, 12], phase: Math.PI, width: 0.35, life: 0.35, dur: 2 });
+    });
+    at(4.48, () => { glowOn = 0.6; });
+  }},
+{ id: "VoidBurst", key: "2", name: "Void Burst", cam: CAM_DEFAULT,
+  desc: "Black smoke and seven thick ink tendrils collapse into a single point for 0.4 s, then detonate in a blinding white starburst with a long horizontal flare streak. White electricity crackles around the core while curved black shockwave arcs spray outward. The ground cracks in a circle and dark shards float up before dropping.",
+  time: [["0.00", "60 smoke puffs + 7 ink tendrils implode (r 9)"], ["0.40", "Large flash, 80-spark starburst, 2 core flares"], ["0.40", "6 crackle arcs (0.55 s), 6 black arcs"], ["0.40", "white ground ring to r 22 (0.5 s)"], ["0.40", "9-crack decal, 16 shards, Medium shake"], ["4.05", "decal fully faded"]],
+  cast() {
+    const g = TARGET, core = add(g, [0, 3, 0]);
+    emit(60, { pos: () => add(core, mul(randUnit(), 9)), vel: p => mul(norm(sub(core, p)), 22), life: [0.4, 0.4], size: [4, 0.5], kind: "ink", color: C.black, fadeIn: 0.1 });
+    for (let i = 0; i < 7; i++) { const d = randUnit(); bolt(age => { const t = clamp(age / 0.4, 0, 1); return [add(core, mul(d, 9 * (1 - t * t))), core]; }, { seg: 8, amp: 1.4, width: 0.9, end: 0.15, dur: 0.4, fade: 0.05, flicker: 0.06, ink: true }); }
+    at(0.4, () => {
+      flash(core, "Large"); coreFlare(core, 2);
+      emit(80, { pos: core, vel: () => mul(randUnit(), rnd(60, 110)), life: [0.3, 0.55], size: [1.2, 0], drag: 5, streak: 3 });
+      inkSmoke(core, 30);
+      crackle(core, 3.5, 6, { seg: 6, amp: 0.7, width: 0.18, end: 0.3, dur: 0.55, fade: 0.15, flicker: 0.04 });
+      for (let i = 0; i < 6; i++) { const t = 55 * Math.PI / 180; ring(core, { r0: 2, r1: 18, dur: 0.45, width: 1.6, ink: true, span: 110 * Math.PI / 180, seg: 10, tilt: rotXZ(rnd(-t, t), rnd(0, Math.PI * 2), rnd(-t, t)) }); }
+      ring(add(g, [0, 0.06, 0]), { r0: 1, r1: 22, dur: 0.5, width: 1.2, seg: 32 });
+      cracks(g, { radius: 9, count: 9, segs: 5, jitter: 0.45, thick: 0.22, color: C.black, spread: 0.25, hold: 1.2, fade: 2 });
+      shards(g, { count: 16, size: [0.25, 0.7], radius: 8, rise: [2, 6], riseT: 0.45, hangT: 0.4, fallT: 0.55, fallDist: 6 });
+      shake(...SHAKE.Medium);
+    });
+  }},
+{ id: "AbyssalAura", key: "3", name: "Abyssal Aura", cam: { pos: v(7, 6, -12), look: v(0, 2.5, 0) }, loop: true,
+  desc: "A charge-up aura that loops until you press 3 again. Black spiky flames rise from the feet, two white ring trails orbit at different tilts, a white glow pulses at the base and small black shards drift upward in loops over a spreading dark crack decal. Stopping it fires a heavy white flash burst with a shockwave.",
+  time: [["loop", "55 black flames/s, 6 base glows/s"], ["loop", "2 orbit trails, 8 looping shards"], ["loop", "light pulses 2 ± 1.5 at 4 rad/s"], ["0.80", "crack decal fully spread (r 6)"], ["stop", "Large flash, 70 sparks, ring to r 16"], ["max", "auto-stops after 30 s or on death"]],
+  cast() {
+    if (auraActive) { auraStop && auraStop(); return; }
+    auraActive = true;
+    const feet = () => char.pos;
+    const ctr = () => add(char.pos, [0, 2.8, 0]);
+    const o1 = orbitTrail(ctr, { radius: 2.6, height: 0, speed: 6, tilt: [25, 0, 0], phase: 0, width: 0.3, life: 0.4 });
+    const o2 = orbitTrail(ctr, { radius: 3, height: 0.8, speed: -5, tilt: [-15, 0, 30], phase: Math.PI / 2, width: 0.3, life: 0.4 });
+    cracks(char.pos, { radius: 6, count: 7, segs: 4, jitter: 0.5, thick: 0.16, color: C.black, spread: 0.8, hold: 1e6, fade: 1.2 });
+    const decal = fx[fx.length - 1];
+    let accF = 0, accG = 0;
+    const sh = []; for (let i = 0; i < 8; i++) sh.push({ a: i / 8 * Math.PI * 2, r: rnd(1.5, 3.2), ph: rnd(0, 6) });
+    const loop = custom({ dur: 1e9, layer: 2, update(dt) {
+        accF += dt * 55; while (accF >= 1) { accF--; emit(1, { pos: () => add(feet(), [rnd(-2, 2), 0.1, rnd(-2, 2)]), vel: () => [rnd(-0.5, 0.5), rnd(5, 9), rnd(-0.5, 0.5)], acc: [0, 6, 0], life: [0.5, 0.9], size: [1.6, 0], kind: "ink", color: C.black, streak: 1.2 }); }
+        accG += dt * 6; while (accG >= 1) { accG--; emit(1, { pos: add(feet(), [0, 0.3, 0]), vel: [0, 0, 0], life: [0.8, 1], size: [4, 6], color: C.white, alpha: 0.35, fadeIn: 0.3 }); }
+      }, draw(k, age) {
+        const q = proj(add(feet(), [0, 0.4, 0])); if (q) { const b = (2 + Math.sin(age * 4) * 1.5) / 3.5; const r = 6 * q.s;
+          const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r); g.addColorStop(0, `rgba(236,242,255,${0.4 * b})`); g.addColorStop(1, "rgba(236,242,255,0)");
+          ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = g; ctx.fillRect(q.x - r, q.y - r, 2 * r, 2 * r); ctx.globalCompositeOperation = "source-over"; }
+        sh.forEach(s => { const h = (s.ph + age * 1.6) % 6; const a = s.a + age * 1.2; const p = add(feet(), [Math.cos(a) * s.r, h, Math.sin(a) * s.r]); const qq = proj(p); if (!qq) return;
+          const al = Math.sin(Math.PI * h / 6); const r = 0.35 * qq.s; ctx.save(); ctx.translate(qq.x, qq.y); ctx.rotate(age * 3); ctx.fillStyle = `rgba(${C.ink},${al})`;
+          ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r * 0.5, 0); ctx.lineTo(0, r); ctx.lineTo(-r * 0.5, 0); ctx.closePath(); ctx.fill(); ctx.restore(); });
+      }});
+    auraStop = () => { auraActive = false; loop.dur = 0; o1.stopped = true; o2.stopped = true; decal.hold = 0; decal.dur = 0;
+      const p = add(char.pos, [0, 1, 0]); flash(p, "Large"); sparksSpec(p, 70); coreFlare(p, 2); ring(add(char.pos, [0, 0.06, 0]), { r0: 1, r1: 16, dur: 0.45, width: 1, seg: 28 }); shake(...SHAKE.Medium); };
+  }},
+{ id: "ThunderJudgment", key: "4", name: "Thunder Judgment", cam: { pos: v(24, 14, -34), look: v(0, 21, 24) },
+  desc: "Ink-smoke clouds gather 45 studs above the target with faint white arcs flickering inside. A thick jagged white bolt, rebuilt every 0.05 s so it flickers, slams down with four branches and a soft glow behind it. On impact: white flash and flare streak, seven arcs crawling along the ground for 1 s, a scorched crack decal, and sparks that bounce.",
+  time: [["0.00", "cloud pulses every 0.15 s (18 puffs)"], ["0.00", "3 crackle arcs inside the clouds"], ["0.90", "main bolt + glow bolt (0.45 s, flicker 0.05)"], ["0.90", "Large flash, 50 sparks, 14 bouncing sparks"], ["0.90", "7 ground arcs crawl out 14 studs (0.6 s)"], ["0.90", "8-crack scorch decal, Heavy shake"]],
+  cast() {
+    const g = TARGET, sky = add(g, [0, 45, 0]);
+    custom({ dur: 1.35, update(dt, age) { this.acc = (this.acc || 0.15) + dt; while (this.acc >= 0.15) { this.acc -= 0.15;
+      emit(18, { pos: () => add(sky, [rnd(-13, 13), rnd(-2, 2), rnd(-13, 13)]), vel: p => mul(norm(sub(sky, p)), rnd(3, 6)), life: [1.8, 2.4], size: [4, 11], kind: "ink", color: C.smoke, alpha: 0.9, fadeIn: 0.4, drag: 1 }); } }, draw() {} });
+    crackle(sky, 7, 3, { seg: 6, amp: 1.2, width: 0.2, end: 0.3, dur: 0.9, fade: 0.1, flicker: 0.08 });
+    at(0.9, () => {
+      bolt(() => [sky, g], { seg: 14, amp: 3, width: 6, end: 0.8, dur: 0.45, fade: 0.2, flicker: 0.05, alpha: 0.35 });
+      bolt(() => [sky, g], { seg: 14, amp: 3, width: 2.2, end: 0.7, dur: 0.45, fade: 0.2, flicker: 0.05, branches: 4 });
+      const imp = add(g, [0, 0.25, 0]);
+      flash(imp, "Large"); sparksSpec(imp, 50); coreFlare(imp, 1); inkSmoke(imp, 20);
+      for (let i = 0; i < 7; i++) { const a = i / 7 * Math.PI * 2 + rnd(-0.35, 0.35); const e = add(g, [Math.cos(a) * 14 * rnd(0.6, 1), 0.25, Math.sin(a) * 14 * rnd(0.6, 1)]);
+        bolt(age => [imp, lerpV(imp, e, clamp(age / 0.6, 0, 1))], { seg: 8, amp: 1, width: 0.25, end: 0.1, dur: 1, fade: 0.3, flicker: 0.05 }); }
+      cracks(g, { radius: 8, count: 8, segs: 5, jitter: 0.6, thick: 0.2, color: C.black, spread: 0.15, hold: 1.2, fade: 2 });
+      for (let i = 0; i < 14; i++) { const a = rnd(0, 6.28), s = rnd(25, 45); const P = { p: add(g, [0, 0.5, 0]), v: [Math.cos(a) * s, rnd(15, 30), Math.sin(a) * s] };
+        custom({ dur: 1.4, layer: 3, update(dt) { P.v[1] -= 196 * dt * 0.25; P.p = add(P.p, mul(P.v, dt)); if (P.p[1] < 0.1) { P.p[1] = 0.1; P.v[1] = -P.v[1] * 0.8; P.v[0] *= 0.8; P.v[2] *= 0.8; } },
+          draw(k, age) { const q = proj(P.p); if (!q) return; const a2 = age > 1 ? 1 - (age - 1) / 0.4 : 1; ctx.fillStyle = `rgba(255,255,255,${a2})`; ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(1.2, 0.15 * q.s), 0, 6.28); ctx.fill(); } }); }
+      shake(...SHAKE.Heavy);
+    });
+  }},
+{ id: "InfernoSeal", key: "5", name: "Inferno Seal", cam: { pos: v(10, 10, 2), look: v(0, 6, 24) },
+  desc: "A circular rune seal draws itself on the ground in white lines (outer ring, inner ring, a five-point star and tick marks). Then a pillar of black and deep-crimson flames erupts upward with embers and flickering smoke under a flickering crimson light. It ends with a white flash core and a shockwave ring, leaving glowing embers drifting off cracked ground.",
+  time: [["0.00", "seal draws itself (0.8 s), rotates 0.4 rad/s"], ["0.80", "flame pillar pulses every 0.05 s (1.4 s)"], ["0.80", "black 7 + crimson 5 + embers 3 + smoke 2"], ["2.20", "Medium flash, 2 core flares, ring to r 20"], ["2.20", "crimson-glow crack decal (10 cracks)"], ["2.20", "ground embers for 2.5 s"]],
+  cast() {
+    const g = TARGET;
+    runeCircle(add(g, [0, 0.12, 0]), { radius: 9, inner: 0.78, points: 5, step: 2, ticks: 16, tick: 0.8, width: 0.22, draw: 0.8, hold: 1.6, fade: 0.6, rotSpeed: 0.4, ground: true });
+    at(0.8, () => {
+      custom({ dur: 1.4, layer: 3, update(dt) { this.acc = (this.acc || 0.05) + dt; while (this.acc >= 0.05) { this.acc -= 0.05;
+          const base = () => add(g, [rnd(-4, 4), rnd(0, 2), rnd(-4, 4)]);
+          emit(7, { pos: base, vel: () => [rnd(-1, 1), rnd(30, 45), rnd(-1, 1)], life: [0.6, 0.9], size: [3, 0], kind: "ink", color: C.black, streak: 0.8 });
+          emit(5, { pos: base, vel: () => [rnd(-1, 1), rnd(28, 40), rnd(-1, 1)], life: [0.5, 0.8], size: [2.4, 0], color: C.crimsonB, alpha: 0.9, streak: 0.8 });
+          emit(3, { pos: base, vel: () => [rnd(-6, 6), rnd(18, 34), rnd(-6, 6)], life: [0.9, 1.6], size: [0.35, 0], color: C.crimsonB, drag: 1.5, acc: [0, 4, 0] });
+          emit(2, { pos: base, vel: () => [rnd(-2, 2), rnd(14, 22), rnd(-2, 2)], life: [1, 1.5], size: [3, 8], kind: "ink", color: C.smoke, alpha: 0.6 }); } },
+        draw(k) { const q = proj(add(g, [0, 4, 0])); if (!q) return; const fl = rnd(0.6, 1.2) * (1 - k); const r = 26 * q.s * 0.6;
+          const gr = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, r); gr.addColorStop(0, `rgba(${C.crimsonB},${0.45 * fl})`); gr.addColorStop(1, `rgba(${C.crimsonB},0)`);
+          ctx.globalCompositeOperation = "lighter"; ctx.fillStyle = gr; ctx.fillRect(q.x - r, q.y - r, 2 * r, 2 * r); ctx.globalCompositeOperation = "source-over"; } });
+    });
+    at(2.2, () => { const core = add(g, [0, 2, 0]); flash(core, "Medium"); coreFlare(core, 2); ring(add(g, [0, 0.06, 0]), { r0: 2, r1: 20, dur: 0.5, width: 1.2, seg: 32 });
+      cracks(g, { radius: 9, count: 10, segs: 5, jitter: 0.5, thick: 0.2, color: C.crimsonB, glow: true, spread: 0.3, hold: 1.5, fade: 2 }); shake(...SHAKE.Medium);
+      custom({ dur: 2.5, update(dt) { this.acc = (this.acc || 0) + dt; while (this.acc >= 0.1) { this.acc -= 0.1;
+        emit(4, { pos: () => add(g, [rnd(-9, 9), rnd(0, 2), rnd(-9, 9)]), vel: () => [rnd(-1, 1), rnd(0.5, 2), rnd(-1, 1)], acc: [0, 1, 0], life: [1.5, 2.5], size: [0.25, 0], color: C.crimsonB }); } }, draw() {} }); });
+  }},
+{ id: "FrostRequiem", key: "6", name: "Frost Requiem", cam: { pos: v(12, 8, -10), look: v(0, 2, 13) },
+  desc: "Sharp pale-cyan crystal spikes burst out of the ground one after another in a line from the caster to the target, each with a white rim glow. Frost mist rolls along the floor, white shard particles shatter outward at the target, and a frozen star-pattern crack spreads. After 1.5 s every spike shatters into tumbling glass fragments.",
+  time: [["0.00", "spikes every 4 studs, 0.04 s apart (max 24)"], ["0.00", "4 mist + 6 snow per spike"], ["0.24", "final spike x1.6 at the target"], ["0.24", "Medium flash, 60 shatter shards, ring r 16"], ["0.24", "8-arm star crack, pale cyan glow"], ["1.74", "spikes shatter, 5 fragments each"]],
+  cast() {
+    const start = char.pos, end = TARGET, dist = len(sub(end, start)); const dir = norm(sub(end, start)); const side = [-dir[2], 0, dir[0]];
+    const n = clamp(Math.floor((dist - 3) / 4) + 1, 1, 24);
+    const spikes = [];
+    for (let i = 0; i < n; i++) at(i * 0.04, () => {
+      const last = i === n - 1; const along = last ? dist : Math.min(3 + i * 4, dist); const p = add(add(start, mul(dir, along)), mul(side, last ? 0 : rnd(-1.2, 1.2)));
+      const sc = last ? 1.6 : 1; const sp = { p, h: rnd(4, 8) * sc, w: rnd(0.8, 1.5) * sc, lean: [rnd(-0.35, 0.35), rnd(-0.35, 0.35)], born: now, dead: false };
+      spikes.push(sp);
+      emit(4, { pos: () => add(p, [rnd(-1, 1), 0.3, rnd(-1, 1)]), vel: () => [rnd(-5, 5), rnd(0, 0.3), rnd(-5, 5)], life: [1.2, 1.8], size: [2, 6], color: C.cyan, alpha: 0.35, drag: 1, fadeIn: 0.3 });
+      emit(6, { pos: add(p, [0, 1, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white });
+      custom({ dur: 1.5 + (n - i) * 0.04, layer: 2, draw(k, age) {
+        if (sp.dead) return; const grow = Math.min(1, age / 0.15); const e = 1 + 2.7 * Math.pow(grow - 1, 3) + 1.7 * Math.pow(grow - 1, 2); // Back out
+        const h = sp.h * e * 0.6; const tip = add(p, [sp.lean[0] * h, h, sp.lean[1] * h]);
+        const bl = proj(add(p, mul(side, -sp.w / 2))), br = proj(add(p, mul(side, sp.w / 2))), bf = proj(add(p, mul(dir, -sp.w / 2))), tq = proj(tip); if (!bl || !br || !tq || !bf) return;
+        ctx.beginPath(); ctx.moveTo(bl.x, bl.y); ctx.lineTo(tq.x, tq.y); ctx.lineTo(br.x, br.y); ctx.lineTo(bf.x, bf.y); ctx.closePath();
+        const gr = ctx.createLinearGradient(bl.x, bl.y, br.x, tq.y); gr.addColorStop(0, "rgba(150,215,240,0.95)"); gr.addColorStop(1, "rgba(220,246,255,0.9)");
+        ctx.fillStyle = gr; ctx.fill(); ctx.strokeStyle = "rgba(255,255,255,0.95)"; ctx.lineWidth = Math.max(1, 0.08 * tq.s); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(bf.x, bf.y); ctx.lineTo(tq.x, tq.y); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1; ctx.stroke(); } });
+    });
+    const tImp = (n - 1) * 0.04;
+    at(tImp, () => { const imp = add(end, [0, 4, 0]); flash(imp, "Medium");
+      emit(60, { pos: imp, vel: () => mul(randUnit(), rnd(35, 60)), acc: [0, -20, 0], drag: 4, life: [0.4, 0.8], size: [0.7, 0], color: C.cyan, streak: 1 });
+      ring(add(end, [0, 0.06, 0]), { r0: 1, r1: 16, dur: 0.45, width: 0.9, seg: 28 });
+      cracks(end, { radius: 10, count: 8, segs: 4, jitter: 0.08, thick: 0.18, color: C.cyan, glow: true, pattern: "star", spread: 0.35, hold: 1.5, fade: 2 }); shake(...SHAKE.Medium); });
+    at(tImp + 1.5, () => spikes.forEach(sp => { sp.dead = true; shards(sp.p, { count: 5, size: [0.2, 0.5], radius: 0.8, rise: [0.5, 3], spread: 3, riseT: 0.25, hangT: 0.1, fallT: 0.45, fallDist: 5, color: C.ice });
+      emit(10, { pos: add(sp.p, [0, sp.h * 0.4, 0]), vel: () => mul(randUnit(), rnd(3, 8)), acc: [0, -4, 0], life: [0.8, 1.4], size: [0.25, 0], color: C.white }); }));
+  }},
+{ id: "GaleReaper", key: "7", name: "Gale Reaper", cam: { pos: v(3, 7, -11), look: v(0, 2.5, 18) },
+  desc: "A fast crescent wind slash fired forward at 140 studs/s. A huge curved white blade with black smoky edges travels to the target, leaving speed lines, ink wisps and two wind spirals. On contact it splits into four smaller fading crescents, kicks up dust and debris, and carves a long slash-shaped crack decal.",
+  time: [["0.00", "crescent launches (half-width 7, bulge 5)"], ["0.00", "speed lines + ink wake every 0.02 s"], ["0.00", "2 wind spirals at 24 rad/s"], ["0.15", "arrives; splits into 4 crescents (70° fan)"], ["0.15", "Small flash, 25 dust, 10 shards"], ["0.15", "22-stud slash crack, Light shake"]],
+  cast() {
+    const start = add(char.pos, [0, 2.5, 2.5]), end = add(TARGET, [0, 2, 0]); const dir = norm(sub(end, start)); const D = len(sub(end, start));
+    const travel = Math.max(D / 140, 0.12) * 1.6; // slowed 1.6x in the mockup so the blade is visible
+    const crescent = (from, d, dist, dur, scale, fade, onArrive) => {
+      const right = norm(cross([0, 1, 0], d)); const hist = [];
+      custom({ dur, layer: 3, update(dt, age) { const p = add(from, mul(d, dist * (age / dur))); hist.push(p); if (hist.length > 6) hist.shift(); if (Math.random() < 0.9) emit(3, { pos: () => add(p, add(mul(right, rnd(-6, 6) * scale), [0, rnd(-1, 1), 0])), vel: mul(d, -rnd(40, 80)), life: [0.15, 0.3], size: [0.25, 0], streak: 3 }); },
+        draw(k, age) { const a = fade ? 1 - k : 1; const p = add(from, mul(d, dist * (age / dur)));
+          const pts = []; for (let i = 0; i <= 24; i++) { const t = i / 24 * 2 - 1; pts.push(add(add(p, mul(right, t * 7 * scale)), add(mul(d, (1 - t * t) * 5 * scale), [0, t * 1.2 * scale, 0]))); }
+          const stroke = (offset, w, style) => { ctx.lineCap = "round"; for (let i = 0; i < pts.length - 1; i++) { const t = i / 24 * 2 - 1; const q0 = proj(add(pts[i], mul(d, -offset))), q1 = proj(add(pts[i + 1], mul(d, -offset))); if (!q0 || !q1) continue; ctx.lineWidth = Math.max(0.8, w * (1 - t * t) * q0.s * scale); ctx.strokeStyle = style; ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke(); } };
+          stroke(0.8, 4, `rgba(${C.black},${0.7 * a})`); stroke(0, 3.2, `rgba(255,255,255,${0.35 * a})`); stroke(0, 1.6, `rgba(255,255,255,${a})`);
+          for (let s = 0; s < 2; s++) { ctx.beginPath(); for (let j = 0; j < 14; j++) { const tt = age - j * 0.012; if (tt < 0) break; const c = add(from, mul(d, dist * (tt / dur))); const ang = tt * 24 + s * Math.PI; const up = [0, 1, 0];
+            const q = proj(add(c, add(mul(right, Math.cos(ang) * 1.6 * scale), mul(up, Math.sin(ang) * 1.6 * scale)))); if (!q) continue; j ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }
+            ctx.strokeStyle = `rgba(255,255,255,${0.6 * a})`; ctx.lineWidth = 1.5; ctx.stroke(); }
+        }});
+      if (onArrive) at(dur, onArrive);
+    };
+    crescent(start, dir, D, travel, 1, false, () => {
+      for (let i = 0; i < 4; i++) { const yaw = (-35 + 70 * i / 3) * Math.PI / 180; const d2 = norm([dir[0] * Math.cos(yaw) - dir[2] * Math.sin(yaw), dir[1], dir[0] * Math.sin(yaw) + dir[2] * Math.cos(yaw)]); crescent(end, d2, 14, 0.3, 0.4, true); }
+      flash(end, "Small");
+      emit(25, { pos: TARGET, vel: () => [rnd(-15, 15), rnd(2, 8), rnd(-15, 15)], drag: 3, life: [0.6, 1.1], size: [2, 6], kind: "ink", color: C.grey, alpha: 0.6 });
+      shards(TARGET, { count: 10, size: [0.2, 0.55], radius: 4, rise: [1.5, 4], spread: 2, riseT: 0.35, hangT: 0.25, fallT: 0.5, fallDist: 5 });
+      const flat = norm([dir[0], 0, dir[2]]);
+      cracks(sub(TARGET, mul(flat, 11)), { pattern: "slash", forward: flat, length: 22, radius: 2.5, count: 6, segs: 8, jitter: 0.3, thick: 0.24, color: C.black, spread: 0.18, hold: 1.2, fade: 2 });
+      shake(...SHAKE.Light);
+    });
+  }},
+{ id: "CelestialVerdict", key: "8", name: "Celestial Verdict", cam: { pos: v(36, 30, -86), look: v(0, 34, 24) },
+  desc: "The ultimate. The sky dims and desaturates, and a giant white rune circle (seven-point star) draws itself 70 studs above the target and rotates. A massive pillar of white light crashes down, outlined by six crackling bolts and wrapped in black ink smoke spiralling upward. Impact: a huge flare streak, a double shockwave ring, heavy camera shake, a crater-sized crack decal and dozens of shards hanging mid-air before they fall. Lighting is restored afterwards.",
+  time: [["0.00", "sky dims (0.6 s), rune circle r 22 at 70 studs"], ["1.40", "pillar crashes down in 0.12 s"], ["1.40", "6 edge bolts, ink spiral + 4 ink trails"], ["1.52", "Ultimate flash, 120 sparks, 3 core flares"], ["1.52", "white ring r 45 + black ring r 30 (+0.18 s)"], ["1.52", "14-crack crater, 40 shards hang 1.2 s"]],
+  cast() {
+    const g = TARGET, sky = add(g, [0, 70, 0]);
+    dimTarget = 1;
+    runeCircle(sky, { radius: 22, inner: 0.82, points: 7, step: 3, ticks: 28, tick: 1.6, width: 0.5, draw: 0.9, hold: 2.6, fade: 0.8, rotSpeed: 0.5 });
+    at(1.4, () => {
+      custom({ dur: 0.12 + 1.4 + 0.5, layer: 3, draw(k, age) { const crash = clamp(age / 0.12, 0, 1); const bottom = lerpV(sky, g, crash * crash);
+        const fade = age > 1.52 ? clamp((age - 1.52) / 0.5, 0, 1) : 0; const qa = proj(sky), qb = proj(bottom); if (!qa || !qb) return;
+        ctx.globalCompositeOperation = "lighter";
+        [[18, 0.25], [9, 1]].forEach(([w, a]) => { const wa = w * qa.s * (1 - fade), wb = w * qb.s * (1 - fade);
+          const grd = ctx.createLinearGradient(qb.x - wb / 2, 0, qb.x + wb / 2, 0); grd.addColorStop(0, "rgba(255,255,255,0)"); grd.addColorStop(0.5, `rgba(255,255,255,${a * (1 - fade)})`); grd.addColorStop(1, "rgba(255,255,255,0)");
+          ctx.fillStyle = grd; ctx.beginPath(); ctx.moveTo(qa.x - wa / 2, qa.y); ctx.lineTo(qa.x + wa / 2, qa.y); ctx.lineTo(qb.x + wb / 2, qb.y); ctx.lineTo(qb.x - wb / 2, qb.y); ctx.closePath(); ctx.fill(); });
+        ctx.globalCompositeOperation = "source-over"; } });
+      for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2, off = [Math.cos(a) * 6, 0, Math.sin(a) * 6]; bolt(() => [add(sky, off), add(g, off)], { seg: 16, amp: 1.6, width: 0.35, end: 0.5, dur: 1.4, fade: 0.4, flicker: 0.05 }); }
+      custom({ dur: 1.4, update(dt) { this.acc = (this.acc || 0) + dt; while (this.acc >= 0.05) { this.acc -= 0.05;
+        emit(6, { pos: () => { const a = rnd(0, 6.28); return add(g, [Math.cos(a) * 11, 0, Math.sin(a) * 11]); }, vel: p => { const r = sub(p, g); return add([0, rnd(18, 30), 0], mul(norm([-r[2], 0, r[0]]), 6)); }, life: [1.2, 1.8], size: [3, 7], kind: "ink", color: C.black, alpha: 0.85, fadeIn: 0.15 }); } }, draw() {} });
+      for (let i = 0; i < 4; i++) orbitTrail(() => g, { radius: 10, height: 0, speed: 5, tilt: [0, 0, 0], phase: i / 4 * Math.PI * 2, rise: 40, width: 2.2, life: 0.9, dur: 1.4, ink: true });
+    });
+    at(1.52, () => { flash(add(g, [0, 2, 0]), "Ultimate"); coreFlare(add(g, [0, 2, 0]), 3, 30); sparksSpec(add(g, [0, 1, 0]), 120); inkSmoke(add(g, [0, 1, 0]), 50);
+      ring(add(g, [0, 0.06, 0]), { r0: 4, r1: 45, dur: 0.7, width: 3, seg: 48 }); ring(add(g, [0, 0.08, 0]), { r0: 2, r1: 30, dur: 0.8, width: 2, seg: 40, ink: true, delay: 0.18 });
+      cracks(g, { radius: 22, count: 14, segs: 7, jitter: 0.5, thick: 0.4, color: C.black, spread: 0.3, hold: 2, fade: 2.2 });
+      shards(g, { count: 40, size: [0.3, 1.2], radius: 20, rise: [4, 14], spread: 2, drift: 0.6, riseT: 0.6, hangT: 1.2, fallT: 0.7, fallDist: 14 });
+      shake(...SHAKE.Ultimate); });
+    at(1.4 + 0.12 + 1.4 + 0.5, () => { dimTarget = 0; });
+  }},
+];
+
+// ---------- main loop ----------
+let last = performance.now(), current = null, castAt = 0;
+function frame(t) {
+  const dt = Math.min(0.05, (t - last) / 1000); last = t; now += dt;
+  updateCamera(dt);
+  for (let i = timers.length - 1; i >= 0; i--) if (now >= timers[i].t) { const f = timers[i].fn; timers.splice(i, 1); f(); }
+  // shake
+  shakeX = shakeY = 0;
+  for (let i = shakes.length - 1; i >= 0; i--) { const s = shakes[i]; s.t += dt; if (s.t >= s.dur) { shakes.splice(i, 1); continue; } const f = 1 - s.t / s.dur; const m = s.mag * f * f * 9;
+    shakeX += Math.sin(s.t * 70 + s.seed) * m; shakeY += Math.cos(s.t * 61 + s.seed * 2) * m; }
+  dim += (dimTarget - dim) * (1 - Math.exp(-dt * (dimTarget ? 1 / 0.25 : 1 / 0.5)));
+
+  drawWorld();
+  if (dim > 0.01) { ctx.fillStyle = `rgba(6,6,10,${0.62 * dim})`; ctx.fillRect(0, 0, W, H); }
+
+  // update fx
+  for (let i = fx.length - 1; i >= 0; i--) { const e = fx[i]; e.t0 ??= now + (e.delay || 0); const age = now - e.t0; if (age < 0) continue;
+    if (age > e.dur) { fx.splice(i, 1); continue; } e.update && e.update(dt, age); }
+  // update particles
+  for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.age += dt; if (p.age >= p.life) { parts.splice(i, 1); continue; }
+    p.vel = add(mul(p.vel, Math.max(0, 1 - p.drag * dt)), mul(p.acc, dt)); p.pos = add(p.pos, mul(p.vel, dt)); }
+
+  const drawFx = layer => { for (const e of fx) { const age = now - e.t0; if (age < 0 || e.layer !== layer || !e.draw) continue; ctx.save(); e.draw(clamp(age / e.dur, 0, 1), age); ctx.restore(); } };
+  drawFx(0); drawFx(0.5);
+  drawCharacter();
+  drawFx(1);
+  // ink particles (normal blend), far to near
+  const sorted = parts.slice().sort((a, b) => len(sub(b.pos, cam.pos)) - len(sub(a.pos, cam.pos)));
+  for (const p of sorted) if (p.kind === "ink") drawParticle(p);
+  drawFx(2);
+  ctx.globalCompositeOperation = "lighter";
+  for (const p of parts) if (p.kind !== "ink") drawParticle(p);
+  ctx.globalCompositeOperation = "source-over";
+  drawFx(3);
+  drawFx(4);
+  if (screenFlash > 0.01) { ctx.fillStyle = `rgba(255,255,255,${screenFlash})`; ctx.fillRect(0, 0, W, H); screenFlash *= Math.exp(-dt * 9); }
+
+  updateHud();
+  if (autoBox.checked && current && now - castAt > (current.loop ? 5 : 6.5)) {
+    if (current.loop && auraActive) { auraStop(); castAt = now - 3.5; }
+    else next();
+  }
+  requestAnimationFrame(frame);
+}
+function drawParticle(p) {
+  const q = proj(p.pos); if (!q) return; const k = p.age / p.life;
+  const size = lerp(p.s0, p.s1, k) * q.s * 0.5; if (size < 0.3) return;
+  let a = p.alpha * (p.fadeIn ? Math.min(1, p.age / p.fadeIn) : 1) * (1 - k * k);
+  if (p.streak) { const v2 = proj(add(p.pos, mul(p.vel, -0.02 * p.streak))); if (v2) {
+    if (size < 5) { ctx.lineCap = "round"; ctx.lineWidth = Math.max(0.8, size * 0.7); ctx.strokeStyle = `rgba(${p.color},${a})`; ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(v2.x, v2.y); ctx.stroke(); return; }
+    // big streaks = flame tongues: soft blob stretched along the velocity
+    const dx = q.x - v2.x, dy = q.y - v2.y, L = Math.hypot(dx, dy); const stretch = clamp(1 + L / size, 1, 3.5);
+    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(Math.atan2(dy, dx) + Math.PI / 2); ctx.scale(1 / Math.sqrt(stretch), stretch);
+    const gg = ctx.createRadialGradient(0, 0, 0, 0, 0, size); gg.addColorStop(0, `rgba(${p.color},${a})`); gg.addColorStop(0.5, `rgba(${p.color},${a * 0.6})`); gg.addColorStop(1, `rgba(${p.color},0)`);
+    ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(0, 0, size, 0, Math.PI * 2); ctx.fill(); ctx.restore(); return; } }
+  const g = ctx.createRadialGradient(q.x, q.y, 0, q.x, q.y, size);
+  if (p.kind === "ink") { g.addColorStop(0, `rgba(${p.color},${a})`); g.addColorStop(0.6, `rgba(${p.color},${a * 0.8})`); g.addColorStop(1, `rgba(${p.color},0)`); }
+  else { g.addColorStop(0, `rgba(${p.color},${a})`); g.addColorStop(0.4, `rgba(${p.color},${a * 0.5})`); g.addColorStop(1, `rgba(${p.color},0)`); }
+  ctx.fillStyle = g; ctx.fillRect(q.x - size, q.y - size, size * 2, size * 2);
+}
+
+// ---------- UI ----------
+const picker = document.getElementById("picker"), hud = document.getElementById("hud"), autoBox = document.getElementById("auto");
+SPELLS.forEach(s => { const b = document.createElement("button"); b.type = "button"; b.id = "spell-" + s.id; b.innerHTML = `<span class="key">KEY ${s.key}</span>${s.name}`; b.addEventListener("click", () => { autoBox.checked = false; cast(s); }); picker.appendChild(b); s.btn = b; });
+function updateHud() {
+  hud.innerHTML = "<b>Life of Grimoire - VFX test binds</b><br>" + SPELLS.map(s => `[${s.key}] ${s.name}${s.loop && auraActive ? ' <span class="on">[ON]</span>' : ""}`).join("<br>");
+}
+function show(s) {
+  document.getElementById("spellname").textContent = s.name.toUpperCase();
+  document.getElementById("ntitle").textContent = `${s.name} (key ${s.key})`;
+  document.getElementById("ndesc").textContent = s.desc;
+  document.getElementById("ntime").innerHTML = s.time.map(([t, d]) => `<li><span>${t}</span> ${d}</li>`).join("");
+  SPELLS.forEach(x => x.btn.setAttribute("aria-pressed", String(x === s)));
+}
+function cast(s) {
+  if (!(s.loop && auraActive && current === s)) { if (current !== s || !s.loop) { if (auraActive && auraStop) { auraActive = false; } reset(); } }
+  current = s; castAt = now; show(s); setCamera(s.cam || CAM_DEFAULT, false); s.cast();
+}
+function next() { const i = current ? SPELLS.indexOf(current) : -1; cast(SPELLS[(i + 1) % SPELLS.length]); }
+window.addEventListener("keydown", e => { const s = SPELLS.find(x => x.key === e.key); if (s) { autoBox.checked = false; cast(s); } });
+
+// hook for screenshot capture
+window.__preview = { cast: id => { autoBox.checked = false; const s = SPELLS.find(x => x.id === id); setCamera(s.cam || CAM_DEFAULT, true); cast(s); }, ids: SPELLS.map(s => s.id) };
+
+setCamera(SPELLS[0].cam, true); cast(SPELLS[0]);
+requestAnimationFrame(t => { last = t; frame(t); });
+})();
+</script>
