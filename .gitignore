@@ -1,0 +1,16 @@
+# Rojo build output / place files
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+
+# Lockfiles and generated tooling files
+*.lock
+sourcemap.json
+roblox.yml
+roblox.toml
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+node_modules/
